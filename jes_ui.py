@@ -15,9 +15,9 @@ class UI:
         self.sliderList = []
         self.buttonList = []
         pygame.font.init()
-        self.bigFont = pygame.font.Font('C:/Users/caryk/AppData/Local/Microsoft/Windows/Fonts/Jygquip 1.ttf', 60)
-        self.smallFont = pygame.font.Font('C:/Users/caryk/AppData/Local/Microsoft/Windows/Fonts/Jygquip 1.ttf', 30)
-        self.tinyFont = pygame.font.Font('C:/Users/caryk/AppData/Local/Microsoft/Windows/Fonts/Jygquip 1.ttf', 21)
+        self.bigFont = pygame.font.SysFont('Arial', 60)  	
+        self.smallFont = pygame.font.SysFont('Arial', 30)
+        self.tinyFont = pygame.font.SysFont('Arial', 21)
         self.BACKGROUND_PIC = pygame.image.load("visuals/background.png")
         self.W_W = _W_W
         self.W_H = _W_H
@@ -355,6 +355,8 @@ class UI:
         for event in pygame.event.get():
             if event.type == pygame.KEYDOWN:
                 new_gen = None
+                if event.key == pygame.K_c and (pygame.key.get_mods() & pygame.KMOD_CTRL): # pressing Ctrl+C                    
+                    self.running = False                    
                 if event.key == pygame.K_LEFT:
                     new_gen = max(0,self.genSlider.val-1)
                 if event.key == pygame.K_RIGHT:
