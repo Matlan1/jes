@@ -75,42 +75,87 @@ def trapezoidHelper(sac, data, iter_keys, sorted_keys, g1, g2, i_start, i_end, x
     
     for sp in iter_keys[g1]:
         pop1 = d1[sp]
+        if level == 1:
+            if pop1[2] <= i_start or pop1[1] >= i_end:
+                continue
         if level == 0 and pop1[1] != pop2[2]:
-            trapezoidHelper(sac, data, iter_keys, sorted_keys, g2, g1, pop2[2], pop1[1], x2, x1, FAC, 1, ui, color_map)
+            gap_start = min(pop2[2], pop1[1])
+            gap_end = max(pop2[2], pop1[1])
+            trapezoidHelper(sac, data, iter_keys, sorted_keys, g2, g1, gap_start, gap_end, x2, x1, FAC, 1, ui, color_map)
         pop2 = getRangeEvenIfNone(d2, sk2, sp)
         points = [[x1,H-pop2[1]*FAC],[x1,H-pop2[2]*FAC],[x2,H-pop1[2]*FAC],[x2,H-pop1[1]*FAC]]
         pygame.draw.polygon(sac, color_map[sp], points)
 
-def drawSAC(data,sac,margins,ui):
-    sac.fill((0,0,0))
-    LEN = len(data)
-    if LEN == 0:
-        return
-    W = sac.get_width()-margins[0]-margins[1]
-    H = sac.get_height()
-    LEFT = margins[0]
-    iter_keys = [list(data[g].keys()) for g in range(LEN)]
-    sorted_keys = [sorted(iter_keys[g]) for g in range(LEN)]
-    
-    color_map = {}
-    for g in range(LEN):
-        for sp in iter_keys[g]:
-            if sp not in color_map:
-                color_map[sp] = speciesToColor(sp, ui)
+class IncrementalSACRenderer:
+    def __init__(self):
+        self.cached_surface = None
+        self.cached_gen = -1
+        self.color_map = {}
 
-    for g in range(LEN):
-        x1 = LEFT+(g/LEN)*W
-        x2 = LEFT+((g+1)/LEN)*W
-        keys = sorted_keys[g]
-        c_count = data[g][keys[-1]][2]
-        FAC = H/c_count
-        if g == 0:
-            for sp in iter_keys[0]:
-                pop = data[g][sp]
-                points = [[x1,H/2],[x1,H/2],[x2,H-pop[1]*FAC],[x2,H-pop[2]*FAC]]
-                pygame.draw.polygon(sac, color_map[sp], points)
-        else:
-            trapezoidHelper(sac, data, iter_keys, sorted_keys, g, g-1, 0, c_count, x1, x2, FAC, 0, ui, color_map)
+    def draw(self, data, sac, margins, ui):
+        LEN = len(data)
+        if LEN == 0:
+            return
+        W = sac.get_width() - margins[0] - margins[1]
+        H = sac.get_height()
+        LEFT = margins[0]
+
+        # Full redraw if cache is uninitialized or non-sequential
+        if self.cached_surface is None or self.cached_gen != LEN - 2:
+            sac.fill((0,0,0))
+            iter_keys = [list(data[g].keys()) for g in range(LEN)]
+            sorted_keys = [sorted(iter_keys[g]) for g in range(LEN)]
+            for g in range(LEN):
+                for sp in iter_keys[g]:
+                    if sp not in self.color_map:
+                        self.color_map[sp] = speciesToColor(sp, ui)
+            for g in range(LEN):
+                x1 = LEFT+(g/LEN)*W
+                x2 = LEFT+((g+1)/LEN)*W
+                keys = sorted_keys[g]
+                c_count = data[g][keys[-1]][2]
+                FAC = H/c_count
+                if g == 0:
+                    for sp in iter_keys[0]:
+                        pop = data[g][sp]
+                        points = [[x1,H/2],[x1,H/2],[x2,H-pop[1]*FAC],[x2,H-pop[2]*FAC]]
+                        pygame.draw.polygon(sac, self.color_map[sp], points)
+                else:
+                    trapezoidHelper(sac, data, iter_keys, sorted_keys, g, g-1, 0, c_count, x1, x2, FAC, 0, ui, self.color_map)
+            self.cached_surface = sac.copy()
+            self.cached_gen = LEN - 1
+            return
+
+        # Incremental fast redraw: scale previous graph horizontally to (LEN - 1) / LEN * W
+        g = LEN - 1
+        prev_w = int(W * (g / LEN))
+        prev_area = pygame.Rect(LEFT, 0, W, H)
+        scaled_prev = pygame.transform.scale(self.cached_surface.subsurface(prev_area), (prev_w, H))
+        
+        sac.fill((0,0,0))
+        sac.blit(scaled_prev, (LEFT, 0))
+
+        iter_keys = [list(data[g-1].keys()), list(data[g].keys())]
+        sorted_keys = [sorted(iter_keys[0]), sorted(iter_keys[1])]
+        
+        for sp in iter_keys[0] + iter_keys[1]:
+            if sp not in self.color_map:
+                self.color_map[sp] = speciesToColor(sp, ui)
+
+        x1 = LEFT + prev_w
+        x2 = LEFT + W
+        c_count = data[g][sorted_keys[1][-1]][2]
+        FAC = H / c_count
+        
+        d_slice = [data[g-1], data[g]]
+        trapezoidHelper(sac, d_slice, iter_keys, sorted_keys, 1, 0, 0, c_count, x1, x2, FAC, 0, ui, self.color_map)
+        self.cached_surface = sac.copy()
+        self.cached_gen = LEN - 1
+
+_sac_renderer = IncrementalSACRenderer()
+
+def drawSAC(data, sac, margins, ui):
+    _sac_renderer.draw(data, sac, margins, ui)
         
 def drawGeneGraph(species_info, ps, gg, sim, ui, font):  # ps = prominent_species
     R = ui.GENEALOGY_COOR[4]

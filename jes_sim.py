@@ -83,17 +83,16 @@ class Sim:
             # load calm state into nodeCoor
             for c in range(startIndex,endIndex):
                 n[c-startIndex,:,:,:] = self.creatures[gen][c].calmState
-                n[c-startIndex,:,:,1] -= self.CH  # lift the creature above ground level
+            n[:,:,:,1] -= self.CH  # lift the creature above ground level
         return n
 
     def getMuscleArray(self, gen, startIndex, endIndex):
         COUNT = endIndex-startIndex
-        m = np.zeros((COUNT,self.CH,self.CW,self.beats_per_cycle,self.traits_per_box+1)) # add one trait for diagonal length.
+        m = np.empty((COUNT,self.CH,self.CW,self.beats_per_cycle,self.traits_per_box+1)) # add one trait for diagonal length.
         DNA_LEN = self.CH*self.CW*self.beats_per_cycle*self.traits_per_box
-        for c in range(startIndex,endIndex):
-            dna = self.creatures[gen][c].dna[0:DNA_LEN].reshape(self.CH,self.CW,self.beats_per_cycle,self.traits_per_box)
-            m[c-startIndex,:,:,:,:self.traits_per_box] = 1.0+(dna)/3.0
-        m[:,:,:,:,3] = np.sqrt(np.square(m[:,:,:,:,0])+np.square(m[:,:,:,:,1])) # Set diagonal tendons
+        all_dna = np.array([self.creatures[gen][c].dna[:DNA_LEN] for c in range(startIndex, endIndex)]).reshape(COUNT, self.CH, self.CW, self.beats_per_cycle, self.traits_per_box)
+        m[:,:,:,:,:self.traits_per_box] = 1.0 + all_dna / 3.0
+        m[:,:,:,:,3] = np.hypot(m[:,:,:,:,0], m[:,:,:,:,1]) # Set diagonal tendons
         return m
 
     def simulateImport(self, gen, startIndex, endIndex, fromCalmState):
