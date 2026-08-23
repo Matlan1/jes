@@ -33,16 +33,32 @@ _GRAPH_COOR=(850,50,900,500), _SAC_COOR=(850,560,900,300), _GENEALOGY_COOR=(20,1
 _COLUMN_MARGIN=330, _MOSAIC_DIM=mosaic_dim,
 _MENU_TEXT_UP=180, _CM_MARGIN1=20, _CM_MARGIN2=1)
 
+from jes_crash_logger import setup_global_exception_handler, log_crash
+import sys
+import pygame
+
 sim.ui = ui
 ui.sim = sim
 ui.addButtonsAndSliders()
-    
-sim.initializeUniverse()
-while ui.running:
-    sim.checkALAP()
-    ui.detectMouseMotion()
-    ui.detectEvents()
-    ui.detectSliders()
-    ui.doMovies()
-    ui.drawMenu()
-    ui.show()
+setup_global_exception_handler(sim=sim, ui=ui)
+
+try:
+    sim.initializeUniverse()
+    while ui.running:
+        sim.checkALAP()
+        ui.detectMouseMotion()
+        ui.detectEvents()
+        ui.detectSliders()
+        ui.doMovies()
+        ui.drawMenu()
+        ui.show()
+except KeyboardInterrupt:
+    print("\nSimulation stopped by user.")
+except Exception as e:
+    exc_type, exc_val, exc_tb = sys.exc_info()
+    log_crash(exc_type, exc_val, exc_tb, sim=sim, ui=ui)
+finally:
+    try:
+        pygame.quit()
+    except Exception:
+        pass

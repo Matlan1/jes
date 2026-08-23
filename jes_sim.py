@@ -56,8 +56,8 @@ class Sim:
         self.leader_tenure = 0
         self.min_incubation_survivors = 2 # Option 1: Minimum protected creatures for incubating young species
         self.creatures = None
-        self.rankings = np.zeros((0,self.c_count), dtype=int)
-        self.percentiles = np.zeros((0,self.HUNDRED+1))
+        self.rankings = []
+        self.percentiles = []
         self.species_pops = []
         self.species_info = []
         self.prominent_species = []
@@ -77,7 +77,7 @@ class Sim:
         self.ui.drawCreatureMosaic(0)
         
     def createNewCreature(self, idNumber):
-        dna = np.clip(np.random.normal(0.0, 1.0, self.trait_count),-3,3)
+        dna = np.clip(np.random.normal(0.0, 1.0, self.trait_count).astype(np.float32), -3.0, 3.0)
         return Creature(dna, idNumber, -1, self, self.ui)
         
     def getCalmStates(self, gen, startIndex, endIndex, frameCount, calmingRun):
@@ -342,8 +342,8 @@ class Sim:
                 self.creatures[gen][loser].living = False
         
         self.creatures.append(nextCreatures)
-        self.rankings = np.append(self.rankings,currRankings.reshape((1,self.c_count)),axis=0)
-        self.percentiles = np.append(self.percentiles,newPercentiles.reshape((1,self.HUNDRED+1)),axis=0)
+        self.rankings.append(currRankings.astype(np.int32))
+        self.percentiles.append(newPercentiles.astype(np.float32))
         self.species_pops.append(newSpeciesPops)
         
         drawAllGraphs(self, self.ui)
@@ -354,6 +354,12 @@ class Sim:
         self.ui.genSlider.val_max = gen+1
         self.ui.genSlider.manualUpdate(gen)
         self.last_gen_run_time = time.time()-generation_start_time
+        
+        # Periodic memory cleanup: release unneeded calmStates for old historical generations
+        if gen > 15:
+            prune_gen = gen - 15
+            for c in range(self.c_count):
+                self.creatures[prune_gen][c].calmState = None
         
         self.ui.detectMouseMotion()
         

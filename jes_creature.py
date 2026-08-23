@@ -7,8 +7,10 @@ from jes_species_info import SpeciesInfo
 import random
 
 class Creature:
+    __slots__ = ('dna', 'calmState', 'icons', 'iconCoor', 'IDNumber', 'fitness', 'rank', 'living', 'species', 'sim', 'ui', 'codonWithChange')
+
     def __init__(self,d,pIDNumber,parent_species,_sim,_ui):
-        self.dna = d
+        self.dna = d.astype(np.float32) if isinstance(d, np.ndarray) and d.dtype != np.float32 else d
         self.calmState = None
         self.icons = [None]*2
         self.iconCoor = None
@@ -36,7 +38,7 @@ class Creature:
             if p == 1 or p == 2:
                 px += 1
             py = y+p//2
-            points[p] = [tx+nodeState[px,py,0]*s,ty+nodeState[px,py,1]*s]
+            points[p] = [float(tx+nodeState[px,py,0]*s), float(ty+nodeState[px,py,1]*s)]
         pygame.draw.polygon(surface,color,points)
         
     def drawEnvironment(self,surface,nodeState,frame,transform):
@@ -87,7 +89,13 @@ class Creature:
         icon = pygame.Surface(ICON_DIM, pygame.SRCALPHA, 32)
         icon.fill(BG_COLOR)
         transform = [ICON_DIM[0]/2,ICON_DIM[0]/(self.sim.CW+2),ICON_DIM[0]/(self.sim.CH+2.85)]
-        self.drawCreature(icon,self.calmState,BEAT_FADE_TIME,transform,False,False)
+        state = self.calmState
+        if state is None:
+            coorGrid = np.mgrid[0:self.sim.CW+1,0:self.sim.CH+1].astype(np.float32)
+            coorGrid = np.swapaxes(np.swapaxes(coorGrid,0,1),1,2)
+            state = np.pad(coorGrid, ((0,0),(0,0),(0,2)), 'constant')
+            state[:,:,0] -= np.mean(state[:,:,0])
+        self.drawCreature(icon,state,BEAT_FADE_TIME,transform,False,False)
         R = ICON_DIM[0]*0.09
         R2 = ICON_DIM[0]*0.12
         pygame.draw.circle(icon,speciesToColor(self.species, self.ui),(ICON_DIM[0]-R2,R2),R)
@@ -102,8 +110,8 @@ class Creature:
         self.calmState = arr
         
     def getMutatedDNA(self, sim, force_big_mutation=False):
-        mutation = np.clip(np.random.normal(0.0, 1.0, self.dna.shape[0]),-99,99)
-        result = self.dna + sim.mutation_rate*mutation
+        mutation = np.clip(np.random.normal(0.0, 1.0, self.dna.shape[0]).astype(np.float32), -99.0, 99.0)
+        result = self.dna + np.float32(sim.mutation_rate) * mutation
         newSpecies = self.species
         
         big_mut_loc = 0

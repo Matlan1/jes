@@ -58,28 +58,31 @@ def drawLineGraph(data,graph,margins,u,font):
     RIGHT = graph.get_width()-margins[1]
     BOTTOM = graph.get_height()-margins[3]
     
-    minVal = np.amin(data)
-    maxVal = np.amax(data)
+    LEN = len(data)
+    if LEN == 0:
+        return
+        
+    minVal = min(0.0, min(float(d[-1]) for d in data))
+    maxVal = max(1e-6, max(float(d[0]) for d in data))
+    denom = max(maxVal - minVal, 1e-6)
     unit = getUnit((maxVal-minVal)/u)*u
     tick = math.floor(minVal/unit)*unit-unit
     while tick <= maxVal+unit:
-        ay = BOTTOM-H*(tick-minVal)/(maxVal-minVal)
+        ay = float(BOTTOM-H*(tick-minVal)/denom)
         pygame.draw.line(graph, GRAY25, (LEFT, ay), (RIGHT, ay), width=1)
         rightText(graph, dist_to_text(tick, False, u), LEFT-7, ay, GRAY50, font)
         tick += unit
         
-    
     toShow = [0,1,2,3,4,5,6,7,8,9,10,20,30,40,50,60,70,80,90,91,92,93,94,95,96,97,98,99,100]
-    LEN = len(data)
     for g in range(LEN):
         for p in toShow:
-            prevVal = 0 if g == 0 else data[g-1][p]
-            nextVal = data[g][p]
+            prevVal = 0.0 if g == 0 else float(data[g-1][p])
+            nextVal = float(data[g][p])
             
-            x1 = LEFT+(g/LEN)*W
-            x2 = LEFT+((g+1)/LEN)*W
-            y1 = BOTTOM-H*(prevVal-minVal)/(maxVal-minVal)
-            y2 = BOTTOM-H*(nextVal-minVal)/(maxVal-minVal)
+            x1 = float(LEFT+(g/LEN)*W)
+            x2 = float(LEFT+((g+1)/LEN)*W)
+            y1 = float(BOTTOM-H*(prevVal-minVal)/denom)
+            y2 = float(BOTTOM-H*(nextVal-minVal)/denom)
             
             IMPORTANT = (p%10 == 0)
             thickness = 2 if IMPORTANT else 1
