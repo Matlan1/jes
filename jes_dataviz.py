@@ -71,17 +71,14 @@ def drawLineGraph(data,graph,margins,u,font):
     
     toShow = [0,1,2,3,4,5,6,7,8,9,10,20,30,40,50,60,70,80,90,91,92,93,94,95,96,97,98,99,100]
     LEN = len(data)
-    indices = get_plot_indices(LEN, W)
-    for k in range(len(indices)):
-        g = indices[k]
-        g_prev = indices[k-1] if k > 0 else 0
+    for g in range(LEN):
         for p in toShow:
-            prevVal = data[g_prev][p] if g > 0 else 0
+            prevVal = 0 if g == 0 else data[g-1][p]
             nextVal = data[g][p]
             
-            x1 = LEFT+(g_prev/LEN)*W if g > 0 else LEFT+(g/LEN)*W
+            x1 = LEFT+(g/LEN)*W
             x2 = LEFT+((g+1)/LEN)*W
-            y1 = BOTTOM-H*(prevVal-minVal)/(maxVal-minVal) if g > 0 else BOTTOM
+            y1 = BOTTOM-H*(prevVal-minVal)/(maxVal-minVal)
             y2 = BOTTOM-H*(nextVal-minVal)/(maxVal-minVal)
             
             IMPORTANT = (p%10 == 0)
@@ -128,6 +125,56 @@ class IncrementalSACRenderer:
         self.cached_gen = -1
         self.color_map = {}
 
+    def _full_redraw(self, data, sac, W, H, LEFT, LEN, ui):
+        """Fast full redraw: fill pixel columns directly via numpy array."""
+        sac.fill((0,0,0))
+
+        # Ensure all species have colors
+        for g in range(LEN):
+            for sp in data[g]:
+                if sp not in self.color_map:
+                    self.color_map[sp] = speciesToColor(sp, ui)
+
+        indices = get_plot_indices(LEN, W)
+
+        # Get direct pixel access (H x W x 3 via surfarray is [x, y, channel])
+        pixels = pygame.surfarray.pixels3d(sac)
+
+        for k in range(len(indices)):
+            g = indices[k]
+
+            # Pixel column range for this plotted generation
+            if k > 0:
+                x1 = int(LEFT + (indices[k-1] + 1) / LEN * W)
+            else:
+                x1 = int(LEFT)
+            x2 = int(LEFT + (g + 1) / LEN * W)
+            if x2 <= x1 or x1 >= pixels.shape[0] or x2 <= 0:
+                continue
+            x1 = max(x1, 0)
+            x2 = min(x2, pixels.shape[0])
+
+            sp_data = data[g]
+            sorted_sps = sorted(sp_data.keys())
+            if not sorted_sps:
+                continue
+            c_count = sp_data[sorted_sps[-1]][2]
+            if c_count == 0:
+                continue
+
+            for sp in sorted_sps:
+                pop = sp_data[sp]
+                y_top = max(0, int(H - pop[2] / c_count * H))
+                y_bot = min(H, int(H - pop[1] / c_count * H))
+                if y_bot <= y_top:
+                    continue
+                color = self.color_map[sp]
+                pixels[x1:x2, y_top:y_bot] = (int(color[0]), int(color[1]), int(color[2]))
+
+        del pixels  # release surfarray lock
+        self.cached_surface = sac.copy()
+        self.cached_gen = LEN - 1
+
     def draw(self, data, sac, margins, ui):
         LEN = len(data)
         if LEN == 0:
@@ -136,36 +183,35 @@ class IncrementalSACRenderer:
         H = sac.get_height()
         LEFT = margins[0]
 
-        # Full redraw if cache is uninitialized or non-sequential
-        if self.cached_surface is None or self.cached_gen != LEN - 2:
-            sac.fill((0,0,0))
-            iter_keys = [list(data[g].keys()) for g in range(LEN)]
-            sorted_keys = [sorted(iter_keys[g]) for g in range(LEN)]
-            for g in range(LEN):
-                for sp in iter_keys[g]:
-                    if sp not in self.color_map:
-                        self.color_map[sp] = speciesToColor(sp, ui)
-            indices = get_plot_indices(LEN, W)
-            for k in range(len(indices)):
-                g = indices[k]
-                g_prev = indices[k-1] if k > 0 else 0
-                x1 = LEFT+(g_prev/LEN)*W if g > 0 else LEFT+(g/LEN)*W
-                x2 = LEFT+((g+1)/LEN)*W
-                keys = sorted_keys[g]
-                c_count = data[g][keys[-1]][2]
-                FAC = H/c_count
-                if g == 0:
-                    for sp in iter_keys[0]:
-                        pop = data[g][sp]
-                        points = [[x1,H/2],[x1,H/2],[x2,H-pop[1]*FAC],[x2,H-pop[2]*FAC]]
-                        pygame.draw.polygon(sac, self.color_map[sp], points)
-                else:
-                    trapezoidHelper(sac, data, iter_keys, sorted_keys, g, g_prev, 0, c_count, x1, x2, FAC, 0, ui, self.color_map)
-            self.cached_surface = sac.copy()
-            self.cached_gen = LEN - 1
+        # Already up to date — just show cache
+        if self.cached_surface is not None and self.cached_gen == LEN - 1:
+            sac.blit(self.cached_surface, (0, 0))
             return
 
-        # Incremental fast redraw: scale previous graph horizontally to (LEN - 1) / LEN * W
+        # First draw or non-sequential jump (e.g. slider scrub) → full redraw
+        if self.cached_surface is None or self.cached_gen != LEN - 2:
+            self._full_redraw(data, sac, W, H, LEFT, LEN, ui)
+            return
+
+        # Sequential step (cached_gen == LEN - 2).
+        # When each gen still gets ≥1 pixel, use the fast incremental path.
+        if LEN <= W:
+            self._incremental(data, sac, W, H, LEFT, LEN, ui)
+            return
+
+        # Past pixel width — periodic compaction cycle.
+        # Redraw every N gens so the chart stays readable.
+        redraw_interval = max(5, LEN // 100)
+        gens_since = LEN - 1 - self.cached_gen
+        if gens_since < redraw_interval:
+            # Between redraws, just show the cached surface
+            sac.blit(self.cached_surface, (0, 0))
+            return
+
+        self._full_redraw(data, sac, W, H, LEFT, LEN, ui)
+
+    def _incremental(self, data, sac, W, H, LEFT, LEN, ui):
+        """Fast incremental: scale previous surface and draw one new gen slice."""
         g = LEN - 1
         prev_w = int(W * (g / LEN))
         prev_area = pygame.Rect(LEFT, 0, W, H)
