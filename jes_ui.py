@@ -41,8 +41,8 @@ class UI:
         self.MS_WC = self.MS_W-self.INFO_W-self.COLUMN_MARGIN        # mosaic screen width (just creatures)
         self.MS_H = self.W_H-self.MENU_TEXT_UP-self.CM_MARGIN1*2
         
-        s1 = int((self.MS_WC)/self.MOSAIC_DIM[0]-self.CM_MARGIN2*2)
-        s2 = int((self.MS_WC)/self.MOSAIC_DIM[1]-self.CM_MARGIN2*2)
+        s1 = max(4, int((self.MS_WC)/self.MOSAIC_DIM[0]-self.CM_MARGIN2*2))
+        s2 = max(2, int((self.MS_WC)/self.MOSAIC_DIM[1]-self.CM_MARGIN2*2))
         self.ICON_DIM = ((s1,s1),(s2,s2),(s2,s2))
         
         self.mosaicVisible = False
@@ -280,16 +280,18 @@ class UI:
         self.drawLightboard(self.infoBarScreen,species,now,(self.INFO_W*0.6,self.MOVIE_SINGLE_DIM[1]+10,self.INFO_W*0.37, self.MS_H-self.MOVIE_SINGLE_DIM[1]-20))
         
     def drawLightboard(self, screen, species, gen, coor):
-        DIM = self.MOSAIC_DIM[-1]
+        DIM = max(1, self.MOSAIC_DIM[-1])
         R = coor[2]/DIM
         for c in range(self.sim.c_count):
             x = coor[0]+R*(c%DIM)
             y = coor[1]+R*(c//DIM)
+            if y + R > coor[1] + coor[3]:
+                break
             col = (0,0,0)
             creature = self.sim.creatures[gen][self.sim.rankings[gen][c]]
             if creature.species == species:
                 col = speciesToColor(species, self)
-            pygame.draw.rect(screen,col,(x,y,R,R))
+            pygame.draw.rect(screen,col,(x,y,max(1.0, R),max(1.0, R)))
         
     def drawMenuText(self):
         y = self.W_H-self.MENU_TEXT_UP
@@ -496,7 +498,7 @@ class UI:
             self.startSampleHelper()
         
     def startSampleHelper(self):
-        L = 8
+        L = min(8, self.sim.c_count)
         self.creatureHighlight = []
         self.visualSimMemory = []
         self.movieScreens = []

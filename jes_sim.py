@@ -1,5 +1,5 @@
 import numpy as np
-from utils import getDistanceArray, applyMuscles
+from utils import getDistanceArray, applyMuscles, HAS_NUMBA, jit_simulateRun
 from jes_creature import Creature
 from jes_species_info import SpeciesInfo
 from jes_dataviz import drawAllGraphs
@@ -116,10 +116,22 @@ class Sim:
 
     def simulateRun(self, param, frameCount, calmingRun):
         nodeCoor, muscles, startCurrentFrame = param
+
+        if HAS_NUMBA and jit_simulateRun is not None:
+            newNodeCoor = jit_simulateRun(
+                nodeCoor, muscles, startCurrentFrame, frameCount, calmingRun,
+                self.beat_time, self.beats_per_cycle, self.gravity_acceleration_coef,
+                self.calming_friction_coef, self.typical_friction_coef,
+                self.ground_friction_coef, self.muscle_coef,
+                self.y_clips[0], self.y_clips[1]
+            )
+            return newNodeCoor, muscles, startCurrentFrame + frameCount
+
         friction = self.calming_friction_coef if calmingRun else self.typical_friction_coef
         CEILING_Y = self.y_clips[0]
         FLOOR_Y = self.y_clips[1]
         
+        nodeCoor = nodeCoor.copy()
         for f in range(frameCount):
             currentFrame = startCurrentFrame+f
             beat = 0

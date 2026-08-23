@@ -153,3 +153,194 @@ def arrayIntMultiply(arr, factor):
     for i in range(len(arr)):
         result[i] = int(arr[i]*factor)
     return result
+
+def parse_population_size(raw_input, default=250):
+    """
+    Parses and autocorrects input population size to the nearest valid value.
+    Valid population sizes are even positive integers >= 2.
+    """
+    if raw_input is None:
+        return default
+    text = str(raw_input).strip()
+    if not text:
+        return default
+    try:
+        val = float(text)
+    except ValueError:
+        print(f"Invalid input '{text}'. Autocorrecting to default population size: {default}")
+        return default
+
+    if not math.isfinite(val):
+        print(f"Invalid input '{text}'. Autocorrecting to default population size: {default}")
+        return default
+
+    int_val = round(val)
+    if int_val < 2:
+        corrected = 2
+        print(f"Population size must be at least 2. Autocorrecting {raw_input} -> {corrected}")
+        return corrected
+
+    if int_val % 2 != 0:
+        corrected = int_val + 1
+        print(f"Population size must be an even integer for pair-wise selection. Autocorrecting {raw_input} -> {corrected}")
+        return corrected
+
+    if int_val != val:
+        print(f"Autocorrecting float {raw_input} -> {int_val}")
+    return int_val
+
+def get_mosaic_dim(c_count):
+    """
+    Computes optimal [big_icons, small_icons, species_tiles, lightboard] grid columns
+    for any arbitrary population size.
+    """
+    if c_count == 250:
+        return [10, 24, 24, 30]
+    if c_count <= 20:
+        val = max(2, c_count)
+        return [val, val, val, max(2, val)]
+    cols_small = max(4, math.ceil(math.sqrt(c_count * 2.3)))
+    cols_big = max(2, int(cols_small * 0.42))
+    cols_lb = max(4, math.ceil(math.sqrt(c_count * 3.6)))
+    return [cols_big, cols_small, cols_small, cols_lb]
+
+# Multi-Core Parallel JIT Engine
+try:
+    from numba import njit, prange
+    HAS_NUMBA = True
+except ImportError:
+    HAS_NUMBA = False
+
+if HAS_NUMBA:
+    @njit(parallel=True, fastmath=True)
+    def jit_simulateRun(nodeCoor_in, muscles, startCurrentFrame, frameCount, calmingRun,
+                        beat_time, beats_per_cycle, gravity, calming_fric, typical_fric,
+                        ground_fric, muscle_coef, ceiling_y, floor_y):
+        COUNT, H_nodes, W_nodes, _ = nodeCoor_in.shape
+        CH = H_nodes - 1
+        CW = W_nodes - 1
+        nodeCoor = nodeCoor_in.copy()
+        friction = calming_fric if calmingRun else typical_fric
+
+        for c in prange(COUNT):
+            for f in range(frameCount):
+                currentFrame = startCurrentFrame + f
+                beat = 0
+                if not calmingRun:
+                    beat = (currentFrame // beat_time) % beats_per_cycle
+                    for ny in range(H_nodes):
+                        for nx in range(W_nodes):
+                            nodeCoor[c, ny, nx, 3] += gravity
+
+                for cy in range(CH):
+                    for cx in range(CW):
+                        m0 = muscles[c, cy, cx, beat, 0]
+                        m1 = muscles[c, cy, cx, beat, 1]
+                        m3 = muscles[c, cy, cx, beat, 3]
+
+                        # Seg 0: (cy, cx) to (cy+1, cx)
+                        dx = nodeCoor[c, cy, cx, 0] - nodeCoor[c, cy+1, cx, 0]
+                        dy = nodeCoor[c, cy, cx, 1] - nodeCoor[c, cy+1, cx, 1]
+                        dist = np.sqrt(dx*dx + dy*dy)
+                        if dist > 1e-9:
+                            ma = (m0 - dist) * muscle_coef / dist
+                            fx = dx * ma
+                            fy = dy * ma
+                            nodeCoor[c, cy, cx, 2] += fx
+                            nodeCoor[c, cy, cx, 3] += fy
+                            nodeCoor[c, cy+1, cx, 2] -= fx
+                            nodeCoor[c, cy+1, cx, 3] -= fy
+
+                        # Seg 1: (cy, cx+1) to (cy+1, cx+1)
+                        dx = nodeCoor[c, cy, cx+1, 0] - nodeCoor[c, cy+1, cx+1, 0]
+                        dy = nodeCoor[c, cy, cx+1, 1] - nodeCoor[c, cy+1, cx+1, 1]
+                        dist = np.sqrt(dx*dx + dy*dy)
+                        if dist > 1e-9:
+                            ma = (m0 - dist) * muscle_coef / dist
+                            fx = dx * ma
+                            fy = dy * ma
+                            nodeCoor[c, cy, cx+1, 2] += fx
+                            nodeCoor[c, cy, cx+1, 3] += fy
+                            nodeCoor[c, cy+1, cx+1, 2] -= fx
+                            nodeCoor[c, cy+1, cx+1, 3] -= fy
+
+                        # Seg 2: (cy, cx) to (cy, cx+1)
+                        dx = nodeCoor[c, cy, cx, 0] - nodeCoor[c, cy, cx+1, 0]
+                        dy = nodeCoor[c, cy, cx, 1] - nodeCoor[c, cy, cx+1, 1]
+                        dist = np.sqrt(dx*dx + dy*dy)
+                        if dist > 1e-9:
+                            ma = (m1 - dist) * muscle_coef / dist
+                            fx = dx * ma
+                            fy = dy * ma
+                            nodeCoor[c, cy, cx, 2] += fx
+                            nodeCoor[c, cy, cx, 3] += fy
+                            nodeCoor[c, cy, cx+1, 2] -= fx
+                            nodeCoor[c, cy, cx+1, 3] -= fy
+
+                        # Seg 3: (cy+1, cx) to (cy+1, cx+1)
+                        dx = nodeCoor[c, cy+1, cx, 0] - nodeCoor[c, cy+1, cx+1, 0]
+                        dy = nodeCoor[c, cy+1, cx, 1] - nodeCoor[c, cy+1, cx+1, 1]
+                        dist = np.sqrt(dx*dx + dy*dy)
+                        if dist > 1e-9:
+                            ma = (m1 - dist) * muscle_coef / dist
+                            fx = dx * ma
+                            fy = dy * ma
+                            nodeCoor[c, cy+1, cx, 2] += fx
+                            nodeCoor[c, cy+1, cx, 3] += fy
+                            nodeCoor[c, cy+1, cx+1, 2] -= fx
+                            nodeCoor[c, cy+1, cx+1, 3] -= fy
+
+                        # Seg 4: (cy, cx) to (cy+1, cx+1)
+                        dx = nodeCoor[c, cy, cx, 0] - nodeCoor[c, cy+1, cx+1, 0]
+                        dy = nodeCoor[c, cy, cx, 1] - nodeCoor[c, cy+1, cx+1, 1]
+                        dist = np.sqrt(dx*dx + dy*dy)
+                        if dist > 1e-9:
+                            ma = (m3 - dist) * muscle_coef / dist
+                            fx = dx * ma
+                            fy = dy * ma
+                            nodeCoor[c, cy, cx, 2] += fx
+                            nodeCoor[c, cy, cx, 3] += fy
+                            nodeCoor[c, cy+1, cx+1, 2] -= fx
+                            nodeCoor[c, cy+1, cx+1, 3] -= fy
+
+                        # Seg 5: (cy, cx+1) to (cy+1, cx)
+                        dx = nodeCoor[c, cy, cx+1, 0] - nodeCoor[c, cy+1, cx, 0]
+                        dy = nodeCoor[c, cy, cx+1, 1] - nodeCoor[c, cy+1, cx, 1]
+                        dist = np.sqrt(dx*dx + dy*dy)
+                        if dist > 1e-9:
+                            ma = (m3 - dist) * muscle_coef / dist
+                            fx = dx * ma
+                            fy = dy * ma
+                            nodeCoor[c, cy, cx+1, 2] += fx
+                            nodeCoor[c, cy, cx+1, 3] += fy
+                            nodeCoor[c, cy+1, cx, 2] -= fx
+                            nodeCoor[c, cy+1, cx, 3] -= fy
+
+                for ny in range(H_nodes):
+                    for nx in range(W_nodes):
+                        nodeCoor[c, ny, nx, 2] *= friction
+                        nodeCoor[c, ny, nx, 3] *= friction
+                        nodeCoor[c, ny, nx, 0] += nodeCoor[c, ny, nx, 2]
+                        nodeCoor[c, ny, nx, 1] += nodeCoor[c, ny, nx, 3]
+
+                        if not calmingRun:
+                            py = nodeCoor[c, ny, nx, 1]
+                            if py >= floor_y:
+                                pressure = py - floor_y
+                                g_mult = 0.5 ** (pressure * ground_fric)
+                                nodeCoor[c, ny, nx, 1] = floor_y
+                                nodeCoor[c, ny, nx, 2] *= g_mult
+
+            if calmingRun:
+                mean_x = 0.0
+                for ny in range(H_nodes):
+                    for nx in range(W_nodes):
+                        mean_x += nodeCoor[c, ny, nx, 0]
+                mean_x /= (H_nodes * W_nodes)
+                for ny in range(H_nodes):
+                    for nx in range(W_nodes):
+                        nodeCoor[c, ny, nx, 0] -= mean_x
+
+        return nodeCoor
+else:
+    jit_simulateRun = None
