@@ -31,20 +31,36 @@ class SpeciesInfo:
             self.best_fitness = fitness
             self.last_improvement_gen = current_gen
 
-    def is_incubating(self, current_gen, leader_tenure=0):
+    def is_incubating(self, current_gen, leader_tenure=0, pop_median=0.0, pop_max=1.0):
         if self.birth_gen == 0:
             return False
         age = current_gen - self.birth_gen
         if age <= 0:
             return True
-        # Base grace period scales with the tenure of the dominant species
-        base_grace = max(15, min(60, 15 + int(0.05 * leader_tenure)))
-        if age <= base_grace:
+        
+        # Performance relative to current population
+        rel_to_median = self.best_fitness / max(pop_median, 1e-6)
+        rel_to_max = self.best_fitness / max(pop_max, 1e-6)
+        
+        # Tiered Grace Period:
+        # Top Newcomers (>= 60% of median or >= 35% of max): Extended VIP grace (25 to 50 gens)
+        # Moderate Performers (>= 25% of median): Standard grace (12 to 20 gens)
+        # Lowest Performers / Flops: Minimum trial grace (6 to 8 gens)
+        if rel_to_median >= 0.6 or rel_to_max >= 0.35:
+            max_grace = min(50, 25 + int(0.04 * leader_tenure))
+        elif rel_to_median >= 0.25:
+            max_grace = min(20, 12 + int(0.02 * leader_tenure))
+        else:
+            max_grace = 7 # Minimum probationary grace for lowest performers
+            
+        if age <= max_grace:
             return True
-        # Progress-gated extension: if the species is actively improving, allow up to 100 gens
+            
+        # Active improvement bonus: if the species is actively breaking records, extend grace
         stagnation = current_gen - self.last_improvement_gen
-        if stagnation <= 10 and age <= 100:
+        if stagnation <= 5 and age <= max_grace + 15:
             return True
+            
         return False
         
     def becomeProminent(self):  # if you are prominent, all your ancestors become prominent.

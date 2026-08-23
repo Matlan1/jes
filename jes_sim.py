@@ -261,25 +261,38 @@ class Sim:
             c = currRankings[rank]
             newPercentiles[p] = self.creatures[gen][c].fitness
         
-        # Option 1: Identify active incubating young species
-        incubating_species = {sp for sp in newSpeciesPops.keys() if self.species_info[sp].is_incubating(gen, self.leader_tenure)}
+        # Tiered merit-based incubation protection:
+        pop_median = newPercentiles[50]
+        pop_max = newPercentiles[0]
+        incubating_species = {sp for sp in newSpeciesPops.keys() if self.species_info[sp].is_incubating(gen, self.leader_tenure, pop_median, pop_max)}
         
-        # Track protected creatures by species to ensure young lineages survive & practice
+        # Sort candidate incubating species by performance so top newcomers get first priority
+        incubating_ranked = sorted(list(incubating_species), key=lambda sp: self.species_info[sp].best_fitness, reverse=True)
+        
+        # Max 15% quota of total population for incubation protection
+        max_incubator_slots = max(2, int(self.c_count * 0.15))
         protected_creatures = set()
+        protected_slots_used = 0
         species_representatives = {}
-        for rank in range(self.c_count):
-            c = currRankings[rank]
-            sp = self.creatures[gen][c].species
-            if sp in incubating_species:
-                reps = species_representatives.setdefault(sp, [])
-                if len(reps) < self.min_incubation_survivors:
-                    reps.append(c)
-                    protected_creatures.add(c)
+        
+        for sp in incubating_ranked:
+            if protected_slots_used >= max_incubator_slots:
+                break
+            for rank in range(self.c_count):
+                c = currRankings[rank]
+                if self.creatures[gen][c].species == sp:
+                    reps = species_representatives.setdefault(sp, [])
+                    if len(reps) < self.min_incubation_survivors:
+                        reps.append(c)
+                        protected_creatures.add(c)
+                        protected_slots_used += 1
+                        if protected_slots_used >= max_incubator_slots:
+                            break
         
         # Option 2: Anti-monopoly carrying capacity cap (max 50% population per species)
         max_cap = max(2, int(self.c_count * self.max_species_fraction))
         species_offspring_count = {sp: 0 for sp in newSpeciesPops}
-        WILD_EXILE_PROB = 0.12 # Calibrated speciation rate: prevents TV static and keeps median climbing
+        WILD_EXILE_PROB = 0.10 # Calibrated speciation rate: prevents TV static and keeps median climbing
 
         currCreatures = self.creatures[-1]
         nextCreatures = [None]*self.c_count
