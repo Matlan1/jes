@@ -124,6 +124,12 @@ class Creature:
                 #Cells that endure a big mutation are also required to be at least somewhat rigid, because if a cell goes from super-short to super-tall but has low rigidity the whole time, then it doesn't really matter.
                 if i == 2 and result[big_mut_loc+i] < 0.5:
                     result[big_mut_loc+i] = 0.5
+            
+            # Neural Synaptic Burst Mutation: rewire weights for a neuron cluster
+            if len(result) > self.sim.DNA_MORPH_LEN:
+                brain_idx = self.sim.DNA_MORPH_LEN + random.randint(0, self.sim.BRAIN_LEN - 10)
+                burst_len = min(10, len(result) - brain_idx)
+                result[brain_idx:brain_idx+burst_len] += np.random.normal(0.0, 1.0, burst_len)
         
         return result, newSpecies, big_mut_loc
         

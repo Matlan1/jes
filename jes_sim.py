@@ -1,5 +1,5 @@
 import numpy as np
-from utils import getDistanceArray, applyMuscles, HAS_NUMBA, jit_simulateRun, flipDNA
+from utils import getDistanceArray, applyMuscles, HAS_NUMBA, jit_simulateRun, flipDNA, N_IN, N_HID, N_OUT, W1_LEN, B1_LEN, W2_LEN, B2_LEN, BRAIN_LEN
 from jes_creature import Creature
 from jes_species_info import SpeciesInfo
 from jes_dataviz import drawAllGraphs
@@ -31,7 +31,18 @@ class Sim:
         
         self.traits_per_box = _traits_per_box
         self.traits_extra = _traits_extra
-        self.trait_count = self.CW*self.CH*self.beats_per_cycle*self.traits_per_box+self.traits_extra
+        
+        # Neural Brain architecture
+        self.N_IN = N_IN
+        self.N_HID = N_HID
+        self.N_OUT = N_OUT
+        self.W1_LEN = W1_LEN
+        self.B1_LEN = B1_LEN
+        self.W2_LEN = W2_LEN
+        self.B2_LEN = B2_LEN
+        self.BRAIN_LEN = BRAIN_LEN
+        self.DNA_MORPH_LEN = self.CW*self.CH*self.beats_per_cycle*self.traits_per_box+self.traits_extra
+        self.trait_count = self.DNA_MORPH_LEN + self.BRAIN_LEN
         
         self.mutation_rate = _mutation_rate
         self.big_mutation_rate = _big_mutation_rate
@@ -71,7 +82,8 @@ class Sim:
         
     def getCalmStates(self, gen, startIndex, endIndex, frameCount, calmingRun):
         param = self.simulateImport(gen, startIndex, endIndex, False)
-        nodeCoor, muscles, _ = self.simulateRun(param, frameCount, True)
+        simResult = self.simulateRun(param, frameCount, True)
+        nodeCoor = simResult[0]
         for c in range(self.c_count):
             self.creatures[gen][c].saveCalmState(nodeCoor[c])
             
@@ -99,11 +111,28 @@ class Sim:
         m[:,:,:,:,3] = np.hypot(m[:,:,:,:,0], m[:,:,:,:,1]) # Set diagonal tendons
         return m
 
+    def getBrainArrays(self, gen, startIndex, endIndex):
+        COUNT = endIndex - startIndex
+        idx = self.DNA_MORPH_LEN
+        all_brains = np.array([self.creatures[gen][c].dna[idx:idx+self.BRAIN_LEN] for c in range(startIndex, endIndex)])
+        
+        w1_end = self.W1_LEN
+        b1_end = w1_end + self.B1_LEN
+        w2_end = b1_end + self.W2_LEN
+        b2_end = w2_end + self.B2_LEN
+        
+        W1 = all_brains[:, :w1_end].reshape(COUNT, self.N_IN, self.N_HID)
+        b1 = all_brains[:, w1_end:b1_end].reshape(COUNT, self.N_HID)
+        W2 = all_brains[:, b1_end:w2_end].reshape(COUNT, self.N_HID, self.N_OUT)
+        b2 = all_brains[:, w2_end:b2_end].reshape(COUNT, self.N_OUT)
+        return W1, b1, W2, b2
+
     def simulateImport(self, gen, startIndex, endIndex, fromCalmState):
         nodeCoor = self.getStartingNodeCoor(gen,startIndex,endIndex,fromCalmState)
         muscles = self.getMuscleArray(gen,startIndex,endIndex)
+        brains_W1, brains_b1, brains_W2, brains_b2 = self.getBrainArrays(gen,startIndex,endIndex)
         currentFrame = 0
-        return nodeCoor, muscles, currentFrame
+        return nodeCoor, muscles, brains_W1, brains_b1, brains_W2, brains_b2, currentFrame
 
     def frameToBeat(self, f):
         return (f//self.beat_time)%self.beats_per_cycle
@@ -113,17 +142,18 @@ class Sim:
         return min(prog/self.beat_fade_time,1)
 
     def simulateRun(self, param, frameCount, calmingRun):
-        nodeCoor, muscles, startCurrentFrame = param
+        nodeCoor, muscles, brains_W1, brains_b1, brains_W2, brains_b2, startCurrentFrame = param
 
         if HAS_NUMBA and jit_simulateRun is not None:
             newNodeCoor = jit_simulateRun(
-                nodeCoor, muscles, startCurrentFrame, frameCount, calmingRun,
+                nodeCoor, muscles, brains_W1, brains_b1, brains_W2, brains_b2,
+                startCurrentFrame, frameCount, calmingRun,
                 self.beat_time, self.beats_per_cycle, self.gravity_acceleration_coef,
                 self.calming_friction_coef, self.typical_friction_coef,
                 self.ground_friction_coef, self.muscle_coef,
                 self.y_clips[0], self.y_clips[1]
             )
-            return newNodeCoor, muscles, startCurrentFrame + frameCount
+            return newNodeCoor, muscles, brains_W1, brains_b1, brains_W2, brains_b2, startCurrentFrame + frameCount
 
         friction = self.calming_friction_coef if calmingRun else self.typical_friction_coef
         CEILING_Y = self.y_clips[0]
@@ -153,7 +183,7 @@ class Sim:
         
         if calmingRun: # If it's a calming run, then take the average location of all nodes to center it at the origin.
             nodeCoor[:,:,:,0] -= np.mean(nodeCoor[:,:,:,0], axis=(1,2), keepdims=True)
-        return nodeCoor, muscles, startCurrentFrame+frameCount  
+        return nodeCoor, muscles, brains_W1, brains_b1, brains_W2, brains_b2, startCurrentFrame+frameCount  
         
     def doSpeciesInfo(self,nsp,best_of_each_species,gen):
         nsp = dict(sorted(nsp.items()))
@@ -193,7 +223,8 @@ class Sim:
         
         gen = len(self.creatures)-1
         creatureState = self.simulateImport(gen, 0, self.c_count, True)
-        nodeCoor, muscles, _ = self.simulateRun(creatureState, self.trial_time, False)
+        simResult = self.simulateRun(creatureState, self.trial_time, False)
+        nodeCoor = simResult[0]
         rawScores = nodeCoor[:,:,:,0].mean(axis=(1, 2)) # find each creature's average X-coordinate
         finalScores = np.abs(rawScores) # Absolute speed / displacement
         

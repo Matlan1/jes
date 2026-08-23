@@ -154,16 +154,66 @@ def arrayIntMultiply(arr, factor):
         result[i] = int(arr[i]*factor)
     return result
 
-def flipDNA(dna, CW, CH, beats_per_cycle, traits_per_box):
+# Neural Brain Architecture Specifications
+N_IN = 8
+N_HID = 12
+N_OUT = 16
+W1_LEN = N_IN * N_HID   # 96
+B1_LEN = N_HID          # 12
+W2_LEN = N_HID * N_OUT  # 192
+B2_LEN = N_OUT          # 16
+BRAIN_LEN = W1_LEN + B1_LEN + W2_LEN + B2_LEN # 316
+
+def flipDNA(dna, CW, CH, beats_per_cycle, traits_per_box, traits_extra=1):
     """
-    Horizontally mirrors a creature's DNA matrix across its width dimension (CW, axis=0).
-    Transforms a leftward sprinter into an identical rightward sprinter with exact 100.0000% physics parity.
+    Horizontally mirrors a creature's morphology DNA and neural brain synaptic weights
+    across its width dimension (CW). Produces exact 100.0000% mirrored physics parity.
     """
-    DNA_LEN = CW * CH * beats_per_cycle * traits_per_box
-    grid = dna[:DNA_LEN].reshape(CW, CH, beats_per_cycle, traits_per_box)
-    flipped_grid = np.flip(grid, axis=0) # flip horizontally along CW (Axis 0)
     new_dna = dna.copy()
-    new_dna[:DNA_LEN] = flipped_grid.flatten()
+    
+    # 1. Flip Morphology Matrix along CW (Axis 0)
+    MORPH_BASE = CW * CH * beats_per_cycle * traits_per_box
+    grid = dna[:MORPH_BASE].reshape(CW, CH, beats_per_cycle, traits_per_box)
+    new_dna[:MORPH_BASE] = np.flip(grid, axis=0).flatten()
+    
+    # 2. Mirror Neural Brain Synapses (if present)
+    DNA_MORPH_LEN = MORPH_BASE + traits_extra
+    if len(dna) >= DNA_MORPH_LEN + BRAIN_LEN:
+        idx = DNA_MORPH_LEN
+        W1 = dna[idx:idx+W1_LEN].reshape(N_IN, N_HID).copy()
+        idx += W1_LEN
+        b1 = dna[idx:idx+B1_LEN].copy()
+        idx += B1_LEN
+        W2 = dna[idx:idx+W2_LEN].reshape(N_HID, N_OUT).copy()
+        idx += W2_LEN
+        b2 = dna[idx:idx+B2_LEN].copy()
+        
+        # Mirror W1 sensory inputs:
+        # S0 (left touch) <-> S1 (right touch)
+        W1_flipped = W1.copy()
+        W1_flipped[0, :] = W1[1, :]
+        W1_flipped[1, :] = W1[0, :]
+        # S2 (sin theta) -> -S2
+        W1_flipped[2, :] = -W1[2, :]
+        # S4 (vx) -> -S4
+        W1_flipped[4, :] = -W1[4, :]
+        
+        # Mirror W2 and b2 outputs (16 outputs mapped to (CH, CW) -> flip along CW):
+        W2_grid = W2.reshape(N_HID, CH, CW)
+        W2_flipped = np.flip(W2_grid, axis=2).reshape(N_HID, N_OUT)
+        
+        b2_grid = b2.reshape(CH, CW)
+        b2_flipped = np.flip(b2_grid, axis=1).reshape(N_OUT)
+        
+        idx = DNA_MORPH_LEN
+        new_dna[idx:idx+W1_LEN] = W1_flipped.flatten()
+        idx += W1_LEN
+        new_dna[idx:idx+B1_LEN] = b1.flatten()
+        idx += B1_LEN
+        new_dna[idx:idx+W2_LEN] = W2_flipped.flatten()
+        idx += W2_LEN
+        new_dna[idx:idx+B2_LEN] = b2_flipped.flatten()
+        
     return new_dna
 
 def parse_population_size(raw_input, default=250):
@@ -216,7 +266,7 @@ def get_mosaic_dim(c_count):
     cols_lb = max(4, math.ceil(math.sqrt(c_count * 3.6)))
     return [cols_big, cols_small, cols_small, cols_lb]
 
-# Multi-Core Parallel JIT Engine
+# Multi-Core Parallel Neural JIT Engine
 try:
     from numba import njit, prange
     HAS_NUMBA = True
@@ -225,7 +275,8 @@ except ImportError:
 
 if HAS_NUMBA:
     @njit(parallel=True, fastmath=True)
-    def jit_simulateRun(nodeCoor_in, muscles, startCurrentFrame, frameCount, calmingRun,
+    def jit_simulateRun(nodeCoor_in, muscles, brains_W1, brains_b1, brains_W2, brains_b2,
+                        startCurrentFrame, frameCount, calmingRun,
                         beat_time, beats_per_cycle, gravity, calming_fric, typical_fric,
                         ground_fric, muscle_coef, ceiling_y, floor_y):
         COUNT, H_nodes, W_nodes, _ = nodeCoor_in.shape
@@ -233,22 +284,89 @@ if HAS_NUMBA:
         CW = W_nodes - 1
         nodeCoor = nodeCoor_in.copy()
         friction = calming_fric if calmingRun else typical_fric
+        omega = 2.0 * np.pi / (beat_time * beats_per_cycle)
 
         for c in prange(COUNT):
             for f in range(frameCount):
                 currentFrame = startCurrentFrame + f
                 beat = 0
+                actions = np.zeros((CH, CW))
+                
                 if not calmingRun:
                     beat = (currentFrame // beat_time) % beats_per_cycle
                     for ny in range(H_nodes):
                         for nx in range(W_nodes):
                             nodeCoor[c, ny, nx, 3] += gravity
 
+                    # 1. Closed-Loop Sensory Perception
+                    # Touch sensors
+                    touch_l = 0.0
+                    touch_r = 0.0
+                    for nx in range(W_nodes):
+                        if nodeCoor[c, CH, nx, 1] >= floor_y - 0.05:
+                            dist_from_left = nx
+                            dist_from_right = (W_nodes - 1) - nx
+                            if dist_from_left < dist_from_right:
+                                touch_l += 1.0
+                            elif dist_from_right < dist_from_left:
+                                touch_r += 1.0
+                            else:
+                                touch_l += 0.5
+                                touch_r += 0.5
+                    touch_l /= (W_nodes / 2.0)
+                    touch_r /= (W_nodes / 2.0)
+                    
+                    # Vestibular tilt sensor
+                    xtop = nodeCoor[c, 0, CW // 2, 0]
+                    ytop = nodeCoor[c, 0, CW // 2, 1]
+                    xbot = nodeCoor[c, CH, CW // 2, 0]
+                    ybot = nodeCoor[c, CH, CW // 2, 1]
+                    dx_tilt = xtop - xbot
+                    dy_tilt = ytop - ybot
+                    dist_t = np.sqrt(dx_tilt * dx_tilt + dy_tilt * dy_tilt) + 1e-6
+                    sin_theta = dx_tilt / dist_t
+                    cos_theta = -dy_tilt / dist_t
+                    
+                    # Velocity / Momentum sensor
+                    vx = 0.0
+                    vy = 0.0
+                    for ny in range(H_nodes):
+                        for nx in range(W_nodes):
+                            vx += nodeCoor[c, ny, nx, 2]
+                            vy += nodeCoor[c, ny, nx, 3]
+                    vx = np.tanh(vx / (H_nodes * W_nodes) * 0.5)
+                    vy = np.tanh(vy / (H_nodes * W_nodes) * 0.5)
+                    
+                    # CPG Oscillator
+                    osc_sin = np.sin(omega * currentFrame)
+                    osc_cos = np.cos(omega * currentFrame)
+                    
+                    # 8-dimensional sensory vector
+                    sensors = np.array([touch_l, touch_r, sin_theta, cos_theta, vx, vy, osc_sin, osc_cos])
+                    
+                    # 2. Neural Brain Forward Pass
+                    hidden = np.zeros(12)
+                    for h in range(12):
+                        val = brains_b1[c, h]
+                        for i in range(8):
+                            val += sensors[i] * brains_W1[c, i, h]
+                        hidden[h] = np.tanh(val)
+                    
+                    for cy in range(CH):
+                        for cx in range(CW):
+                            o = cy * CW + cx
+                            val = brains_b2[c, o]
+                            for h in range(12):
+                                val += hidden[h] * brains_W2[c, h, o]
+                            actions[cy, cx] = np.tanh(val)
+
+                # 3. Dynamic Muscle Physics Integration
                 for cy in range(CH):
                     for cx in range(CW):
-                        m0 = muscles[c, cy, cx, beat, 0]
-                        m1 = muscles[c, cy, cx, beat, 1]
-                        m3 = muscles[c, cy, cx, beat, 3]
+                        mod = 1.0 + 0.4 * actions[cy, cx] if not calmingRun else 1.0
+                        m0 = muscles[c, cy, cx, beat, 0] * mod
+                        m1 = muscles[c, cy, cx, beat, 1] * mod
+                        m3 = muscles[c, cy, cx, beat, 3] * mod
 
                         # Seg 0: (cy, cx) to (cy+1, cx)
                         dx = nodeCoor[c, cy, cx, 0] - nodeCoor[c, cy+1, cx, 0]
@@ -328,6 +446,7 @@ if HAS_NUMBA:
                             nodeCoor[c, cy+1, cx, 2] -= fx
                             nodeCoor[c, cy+1, cx, 3] -= fy
 
+                # 4. Integration & Collisions
                 for ny in range(H_nodes):
                     for nx in range(W_nodes):
                         nodeCoor[c, ny, nx, 2] *= friction

@@ -334,12 +334,13 @@ class UI:
             if self.sample_frames >= self.sim.trial_time+self.SAMPLE_FREEZE_TIME:
                 self.startSampleHelper()
         for i in range(L):
-            if self.visualSimMemory[i][2] < self.sim.trial_time:
+            if self.visualSimMemory[i][-1] < self.sim.trial_time:
                 self.visualSimMemory[i] = self.sim.simulateRun(self.visualSimMemory[i], 1, False)
             DIM = arrayIntMultiply(self.MOVIE_SINGLE_DIM, MSCALE[self.CLH[0]])
             self.movieScreens[i] = pygame.Surface(DIM, pygame.SRCALPHA, 32)
         
-            nodeArr, _, currentFrame = self.visualSimMemory[i]
+            nodeArr = self.visualSimMemory[i][0]
+            currentFrame = self.visualSimMemory[i][-1]
             s = DIM[0]/(self.sim.CW+2)*0.5 # visual transform scale
         
             averageX = np.mean(nodeArr[:,:,:,0])
