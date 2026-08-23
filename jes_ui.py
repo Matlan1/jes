@@ -200,7 +200,8 @@ class UI:
             if creature.iconCoor[1] < self.mosaicScreen.get_height():
                 s = self.styleButton.setting
                 if s <= 1:
-                    self.mosaicScreen.blit(creature.icons[s], creature.iconCoor)
+                    icon = creature.getIcon(s, self.ICON_DIM[s], self.MOSAIC_COLOR, self.sim.beat_fade_time)
+                    self.mosaicScreen.blit(icon, creature.iconCoor)
                 elif s == 2:
                     EXTRA = 1
                     pygame.draw.rect(self.mosaicScreen,speciesToColor(creature.species, self),(creature.iconCoor[0],creature.iconCoor[1],SPACING+EXTRA,SPACING+EXTRA))

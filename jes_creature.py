@@ -93,6 +93,11 @@ class Creature:
         pygame.draw.circle(icon,speciesToColor(self.species, self.ui),(ICON_DIM[0]-R2,R2),R)
         return icon
         
+    def getIcon(self, s, ICON_DIM, BG_COLOR, BEAT_FADE_TIME):
+        if self.icons[s] is None:
+            self.icons[s] = self.drawIcon(ICON_DIM, BG_COLOR, BEAT_FADE_TIME)
+        return self.icons[s]
+        
     def saveCalmState(self, arr):
         self.calmState = arr
         

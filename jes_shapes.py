@@ -123,7 +123,8 @@ def drawSpeciesCircle(screen, s, coor, R, sim, species_info, font, shouldDrawArr
     centerText(screen, name, cx, cy-22, (0,0,0), font)
         
     creature = sim.getCreatureWithID(info.reps[2])
-    tiny_icon = pygame.transform.scale(creature.icons[0], (50,50))
+    icon = creature.getIcon(0, ui.ICON_DIM[0], ui.MOSAIC_COLOR, sim.beat_fade_time)
+    tiny_icon = pygame.transform.scale(icon, (50,50))
     screen.blit(tiny_icon,(cx-25,cy-11))
     
     if shouldDrawArrow:

@@ -58,51 +58,60 @@ def drawLineGraph(data,graph,margins,u,font):
             
 def drawSAC(data,sac,margins,ui):
     sac.fill((0,0,0))
-    for g in range(len(data)):
-        scanDownTrapezoids(data, g, sac, margins, ui)
-        
-def scanDownTrapezoids(data, g, sac, margins, ui):
-    W = sac.get_width()-margins[0]-margins[1]
-    H = sac.get_height()
     LEN = len(data)
-    LEFT = margins[0]
-    RIGHT = sac.get_width()-margins[1]
-    x1 = LEFT+(g/LEN)*W
-    x2 = LEFT+((g+1)/LEN)*W
-    keys = sorted(list(data[g].keys()))
-    c_count = data[g][keys[-1]][2] # ending index of the last entry
-    FAC = H/c_count
-
-    if g == 0:
-        for sp in data[g].keys():
-            pop = data[g][sp]
-            points = [[x1,H/2],[x1,H/2],[x2,H-pop[1]*FAC],[x2,H-pop[2]*FAC]]
-            pygame.draw.polygon(sac,speciesToColor(sp, ui),points)
-    else:
-        trapezoidHelper(sac, data, g, g-1, 0, c_count, x1, x2, FAC, 0, ui)
-   
-def getRangeEvenIfNone(dicty, key):
-    keys = sorted(list(dicty.keys()))
-    if key in keys:
-        return dicty[key]
-    else:
-        n = bisect.bisect(keys, key+0.5)
-        if n >= len(keys):
-            val = dicty[keys[n-1]][2]
-        else:
-            val = dicty[keys[n]][1]
-        return [0,val,val]
-
-def trapezoidHelper(sac, data, g1, g2, i_start, i_end, x1, x2, FAC, level, ui):
-    pop2 = [0,0,0]
+    if LEN == 0:
+        return
+    W = sac.get_width() - margins[0] - margins[1]
     H = sac.get_height()
-    for sp in data[g1].keys():
-        pop1 = data[g1][sp]
-        if level == 0 and pop1[1] != pop2[2]: #there was a gap
-            trapezoidHelper(sac, data, g2, g1, pop2[2], pop1[1], x2, x1, FAC, 1, ui)
-        pop2 = getRangeEvenIfNone(data[g2],sp)
-        points = [[x1,H-pop2[1]*FAC],[x1,H-pop2[2]*FAC],[x2,H-pop1[2]*FAC],[x2,H-pop1[1]*FAC]]
-        pygame.draw.polygon(sac,speciesToColor(sp, ui),points)
+    LEFT = margins[0]
+    color_cache = {}
+
+    for g in range(LEN):
+        x1 = LEFT + (g / LEN) * W
+        x2 = LEFT + ((g + 1) / LEN) * W
+        d_curr = data[g]
+        keys_curr = list(d_curr.keys())
+        c_count = d_curr[keys_curr[-1]][2]
+        FAC = H / c_count
+
+        if g == 0:
+            for sp, pop in d_curr.items():
+                points = [[x1, H/2], [x1, H/2], [x2, H - pop[1]*FAC], [x2, H - pop[2]*FAC]]
+                if sp not in color_cache:
+                    color_cache[sp] = speciesToColor(sp, ui)
+                pygame.draw.polygon(sac, color_cache[sp], points)
+        else:
+            d_prev = data[g - 1]
+            keys_prev = list(d_prev.keys())
+            all_sp = sorted(set(keys_curr) | set(keys_prev))
+            
+            for sp in all_sp:
+                if sp in d_prev:
+                    p1_start, p1_end = d_prev[sp][1], d_prev[sp][2]
+                else:
+                    n = bisect.bisect(keys_prev, sp + 0.5)
+                    val = d_prev[keys_prev[n-1]][2] if n >= len(keys_prev) else d_prev[keys_prev[n]][1]
+                    p1_start = p1_end = val
+
+                if sp in d_curr:
+                    p2_start, p2_end = d_curr[sp][1], d_curr[sp][2]
+                else:
+                    n = bisect.bisect(keys_curr, sp + 0.5)
+                    val = d_curr[keys_curr[n-1]][2] if n >= len(keys_curr) else d_curr[keys_curr[n]][1]
+                    p2_start = p2_end = val
+
+                if p1_start == p1_end and p2_start == p2_end:
+                    continue
+
+                points = [
+                    [x1, H - p1_start * FAC],
+                    [x1, H - p1_end * FAC],
+                    [x2, H - p2_end * FAC],
+                    [x2, H - p2_start * FAC]
+                ]
+                if sp not in color_cache:
+                    color_cache[sp] = speciesToColor(sp, ui)
+                pygame.draw.polygon(sac, color_cache[sp], points)
         
 def drawGeneGraph(species_info, ps, gg, sim, ui, font):  # ps = prominent_species
     R = ui.GENEALOGY_COOR[4]

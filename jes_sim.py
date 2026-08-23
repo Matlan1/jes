@@ -59,11 +59,6 @@ class Sim:
         # initial state, are in calm equilibrium. They shouldn't
         # be holding onto potential energy (e.g. compressed springs)
         self.getCalmStates(0,0,self.c_count,self.stabilization_time,True) #Calm the creatures down so no potential energy is stored
-        
-        for c in range(self.c_count):
-            for i in range(2):
-                self.creatures[0][c].icons[i] = self.creatures[0][c].drawIcon(self.ui.ICON_DIM[i], self.ui.MOSAIC_COLOR, self.beat_fade_time)
-            
         self.ui.drawCreatureMosaic(0)
         
     def createNewCreature(self, idNumber):
@@ -236,9 +231,6 @@ class Sim:
         
         self.getCalmStates(gen+1,0,self.c_count,self.stabilization_time,True)
         #Calm the creatures down so no potential energy is stored
-        for c in range(self.c_count):
-            for i in range(2):
-                self.creatures[gen+1][c].icons[i] = self.creatures[gen+1][c].drawIcon(self.ui.ICON_DIM[i], self.ui.MOSAIC_COLOR, self.beat_fade_time)
   
         self.ui.genSlider.val_max = gen+1
         self.ui.genSlider.manualUpdate(gen)
