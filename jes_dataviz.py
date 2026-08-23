@@ -6,6 +6,39 @@ import pygame
 import random
 import bisect
 
+def get_plot_indices(total_gens, graph_width):
+    """Return a sorted list of generation indices to plot.
+    
+    Recent 25% of generations: always full resolution (every gen).
+    Older 75%: gradually thinned — denser near the recent boundary,
+    sparser at the very beginning.  When total_gens fits comfortably
+    in graph_width pixels, every generation is kept as-is.
+    """
+    if total_gens <= 1:
+        return list(range(total_gens))
+
+    # If everything fits at ≥1 px per gen, no thinning needed
+    if total_gens <= graph_width:
+        return list(range(total_gens))
+
+    recent_frac = 0.25
+    recent_start = int(total_gens * (1.0 - recent_frac))   # first index of "recent" zone
+    recent_indices = list(range(recent_start, total_gens))  # always kept
+
+    # How many pixels remain for the old zone?
+    budget = max(graph_width - len(recent_indices), 20)
+
+    # Build old indices with inverse-quadratic spacing:
+    #   t in [0,1]  →  idx = (1-(1-t)²) * recent_start
+    # Sparse at gen 0, dense approaching the recent boundary.
+    old_set = {0}   # always include the very first generation
+    for i in range(budget):
+        t = i / max(budget - 1, 1)
+        idx = int((1.0 - (1.0 - t) ** 2) * (recent_start - 1))
+        old_set.add(idx)
+
+    return sorted(old_set | set(recent_indices))
+
 def drawAllGraphs(sim, ui):
     drawLineGraph(sim.percentiles, ui.graph, [70,0,30,30], sim.UNITS_PER_METER, ui.smallFont)
     drawSAC(sim.species_pops, ui.sac, [70,0], ui)
@@ -38,14 +71,17 @@ def drawLineGraph(data,graph,margins,u,font):
     
     toShow = [0,1,2,3,4,5,6,7,8,9,10,20,30,40,50,60,70,80,90,91,92,93,94,95,96,97,98,99,100]
     LEN = len(data)
-    for g in range(LEN):
+    indices = get_plot_indices(LEN, W)
+    for k in range(len(indices)):
+        g = indices[k]
+        g_prev = indices[k-1] if k > 0 else 0
         for p in toShow:
-            prevVal = 0 if g == 0 else data[g-1][p]
+            prevVal = data[g_prev][p] if g > 0 else 0
             nextVal = data[g][p]
             
-            x1 = LEFT+(g/LEN)*W
+            x1 = LEFT+(g_prev/LEN)*W if g > 0 else LEFT+(g/LEN)*W
             x2 = LEFT+((g+1)/LEN)*W
-            y1 = BOTTOM-H*(prevVal-minVal)/(maxVal-minVal)
+            y1 = BOTTOM-H*(prevVal-minVal)/(maxVal-minVal) if g > 0 else BOTTOM
             y2 = BOTTOM-H*(nextVal-minVal)/(maxVal-minVal)
             
             IMPORTANT = (p%10 == 0)
@@ -109,8 +145,11 @@ class IncrementalSACRenderer:
                 for sp in iter_keys[g]:
                     if sp not in self.color_map:
                         self.color_map[sp] = speciesToColor(sp, ui)
-            for g in range(LEN):
-                x1 = LEFT+(g/LEN)*W
+            indices = get_plot_indices(LEN, W)
+            for k in range(len(indices)):
+                g = indices[k]
+                g_prev = indices[k-1] if k > 0 else 0
+                x1 = LEFT+(g_prev/LEN)*W if g > 0 else LEFT+(g/LEN)*W
                 x2 = LEFT+((g+1)/LEN)*W
                 keys = sorted_keys[g]
                 c_count = data[g][keys[-1]][2]
@@ -121,7 +160,7 @@ class IncrementalSACRenderer:
                         points = [[x1,H/2],[x1,H/2],[x2,H-pop[1]*FAC],[x2,H-pop[2]*FAC]]
                         pygame.draw.polygon(sac, self.color_map[sp], points)
                 else:
-                    trapezoidHelper(sac, data, iter_keys, sorted_keys, g, g-1, 0, c_count, x1, x2, FAC, 0, ui, self.color_map)
+                    trapezoidHelper(sac, data, iter_keys, sorted_keys, g, g_prev, 0, c_count, x1, x2, FAC, 0, ui, self.color_map)
             self.cached_surface = sac.copy()
             self.cached_gen = LEN - 1
             return
