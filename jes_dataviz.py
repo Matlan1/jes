@@ -56,62 +56,61 @@ def drawLineGraph(data,graph,margins,u,font):
                 thickness = 3
             pygame.draw.line(graph, color, (x1, y1), (x2, y2), width=thickness)
             
+def getRangeEvenIfNone(dicty, sorted_keys, key):
+    if key in dicty:
+        return dicty[key]
+    n = bisect.bisect(sorted_keys, key+0.5)
+    if n >= len(sorted_keys):
+        val = dicty[sorted_keys[n-1]][2]
+    else:
+        val = dicty[sorted_keys[n]][1]
+    return [0,val,val]
+
+def trapezoidHelper(sac, data, iter_keys, sorted_keys, g1, g2, i_start, i_end, x1, x2, FAC, level, ui, color_map):
+    pop2 = [0,0,0]
+    H = sac.get_height()
+    d1 = data[g1]
+    d2 = data[g2]
+    sk2 = sorted_keys[g2]
+    
+    for sp in iter_keys[g1]:
+        pop1 = d1[sp]
+        if level == 0 and pop1[1] != pop2[2]:
+            trapezoidHelper(sac, data, iter_keys, sorted_keys, g2, g1, pop2[2], pop1[1], x2, x1, FAC, 1, ui, color_map)
+        pop2 = getRangeEvenIfNone(d2, sk2, sp)
+        points = [[x1,H-pop2[1]*FAC],[x1,H-pop2[2]*FAC],[x2,H-pop1[2]*FAC],[x2,H-pop1[1]*FAC]]
+        pygame.draw.polygon(sac, color_map[sp], points)
+
 def drawSAC(data,sac,margins,ui):
     sac.fill((0,0,0))
     LEN = len(data)
     if LEN == 0:
         return
-    W = sac.get_width() - margins[0] - margins[1]
+    W = sac.get_width()-margins[0]-margins[1]
     H = sac.get_height()
     LEFT = margins[0]
-    color_cache = {}
+    iter_keys = [list(data[g].keys()) for g in range(LEN)]
+    sorted_keys = [sorted(iter_keys[g]) for g in range(LEN)]
+    
+    color_map = {}
+    for g in range(LEN):
+        for sp in iter_keys[g]:
+            if sp not in color_map:
+                color_map[sp] = speciesToColor(sp, ui)
 
     for g in range(LEN):
-        x1 = LEFT + (g / LEN) * W
-        x2 = LEFT + ((g + 1) / LEN) * W
-        d_curr = data[g]
-        keys_curr = list(d_curr.keys())
-        c_count = d_curr[keys_curr[-1]][2]
-        FAC = H / c_count
-
+        x1 = LEFT+(g/LEN)*W
+        x2 = LEFT+((g+1)/LEN)*W
+        keys = sorted_keys[g]
+        c_count = data[g][keys[-1]][2]
+        FAC = H/c_count
         if g == 0:
-            for sp, pop in d_curr.items():
-                points = [[x1, H/2], [x1, H/2], [x2, H - pop[1]*FAC], [x2, H - pop[2]*FAC]]
-                if sp not in color_cache:
-                    color_cache[sp] = speciesToColor(sp, ui)
-                pygame.draw.polygon(sac, color_cache[sp], points)
+            for sp in iter_keys[0]:
+                pop = data[g][sp]
+                points = [[x1,H/2],[x1,H/2],[x2,H-pop[1]*FAC],[x2,H-pop[2]*FAC]]
+                pygame.draw.polygon(sac, color_map[sp], points)
         else:
-            d_prev = data[g - 1]
-            keys_prev = list(d_prev.keys())
-            all_sp = sorted(set(keys_curr) | set(keys_prev))
-            
-            for sp in all_sp:
-                if sp in d_prev:
-                    p1_start, p1_end = d_prev[sp][1], d_prev[sp][2]
-                else:
-                    n = bisect.bisect(keys_prev, sp + 0.5)
-                    val = d_prev[keys_prev[n-1]][2] if n >= len(keys_prev) else d_prev[keys_prev[n]][1]
-                    p1_start = p1_end = val
-
-                if sp in d_curr:
-                    p2_start, p2_end = d_curr[sp][1], d_curr[sp][2]
-                else:
-                    n = bisect.bisect(keys_curr, sp + 0.5)
-                    val = d_curr[keys_curr[n-1]][2] if n >= len(keys_curr) else d_curr[keys_curr[n]][1]
-                    p2_start = p2_end = val
-
-                if p1_start == p1_end and p2_start == p2_end:
-                    continue
-
-                points = [
-                    [x1, H - p1_start * FAC],
-                    [x1, H - p1_end * FAC],
-                    [x2, H - p2_end * FAC],
-                    [x2, H - p2_start * FAC]
-                ]
-                if sp not in color_cache:
-                    color_cache[sp] = speciesToColor(sp, ui)
-                pygame.draw.polygon(sac, color_cache[sp], points)
+            trapezoidHelper(sac, data, iter_keys, sorted_keys, g, g-1, 0, c_count, x1, x2, FAC, 0, ui, color_map)
         
 def drawGeneGraph(species_info, ps, gg, sim, ui, font):  # ps = prominent_species
     R = ui.GENEALOGY_COOR[4]
