@@ -40,6 +40,10 @@ class Sim:
         self.S_NOTABLE = 0.10 #what proportion of the population does a species need to appear in the genealogy?
         self.HUNDRED = 100 # change this if you want to change the resolution of the percentile-tracking
         self.UNITS_PER_METER = _UNITS_PER_METER
+        self.max_species_fraction = 0.50 # Option 2: Anti-monopoly carrying capacity cap (max 50% population per species)
+        self.current_leader = None
+        self.leader_tenure = 0
+        self.min_incubation_survivors = 2 # Option 1: Minimum protected creatures for incubating young species
         self.creatures = None
         self.rankings = np.zeros((0,self.c_count), dtype=int)
         self.percentiles = np.zeros((0,self.HUNDRED+1))
@@ -151,9 +155,17 @@ class Sim:
             nodeCoor[:,:,:,0] -= np.mean(nodeCoor[:,:,:,0], axis=(1,2), keepdims=True)
         return nodeCoor, muscles, startCurrentFrame+frameCount  
         
-    def doSpeciesInfo(self,nsp,best_of_each_species):
+    def doSpeciesInfo(self,nsp,best_of_each_species,gen):
         nsp = dict(sorted(nsp.items()))
         running = 0
+        if len(nsp) > 0:
+            top_sp = max(nsp, key=lambda k: nsp[k][0])
+            if top_sp == self.current_leader:
+                self.leader_tenure += 1
+            else:
+                self.current_leader = top_sp
+                self.leader_tenure = 1
+
         for sp in nsp.keys():
             pop = nsp[sp][0]
             nsp[sp][1] = running
@@ -167,6 +179,10 @@ class Sim:
                 info.reps[2] = best_of_each_species[sp] # apex representative
             if pop >= self.c_count*self.S_NOTABLE and not info.prominent:  #prominent threshold
                 info.becomeProminent()
+            
+            # Record fitness for adaptive incubation tracking
+            best_creature = self.getCreatureWithID(best_of_each_species[sp])
+            info.record_fitness(gen, best_creature.fitness)
                 
     def checkALAP(self):
         if self.ui.ALAPButton.setting == 1: # We're already ALAP-ing!
@@ -197,13 +213,32 @@ class Sim:
                 newSpeciesPops[species] = [1,None,None]
             if species not in best_of_each_species:
                 best_of_each_species[species] = self.creatures[gen][c].IDNumber
-        self.doSpeciesInfo(newSpeciesPops,best_of_each_species)
+        self.doSpeciesInfo(newSpeciesPops,best_of_each_species,gen)
 
         for p in range(self.HUNDRED+1):
             rank = min(int(self.c_count*p/self.HUNDRED),self.c_count-1)
             c = currRankings[rank]
             newPercentiles[p] = self.creatures[gen][c].fitness
         
+        # Option 1: Identify active incubating young species
+        incubating_species = {sp for sp in newSpeciesPops.keys() if self.species_info[sp].is_incubating(gen, self.leader_tenure)}
+        
+        # Track protected creatures by species to ensure young lineages survive & practice
+        protected_creatures = set()
+        species_representatives = {}
+        for rank in range(self.c_count):
+            c = currRankings[rank]
+            sp = self.creatures[gen][c].species
+            if sp in incubating_species:
+                reps = species_representatives.setdefault(sp, [])
+                if len(reps) < self.min_incubation_survivors:
+                    reps.append(c)
+                    protected_creatures.add(c)
+        
+        # Option 2: Anti-monopoly carrying capacity cap (max 50% population per species)
+        max_cap = max(2, int(self.c_count * self.max_species_fraction))
+        species_offspring_count = {sp: 0 for sp in newSpeciesPops}
+
         currCreatures = self.creatures[-1]
         nextCreatures = [None]*self.c_count
         for rank in range(self.c_count//2):
@@ -213,13 +248,37 @@ class Sim:
                 ph = loser
                 loser = winner
                 winner = ph
+            
+            w_species = self.creatures[gen][winner].species
             nextCreatures[winner] = None
-            if random.uniform(0,1) < rank/self.c_count*2.0:  # A 1st place finisher is guaranteed to make a clone, but as we get closer to the middle the odds get more likely we just get 2 mutants.
-                nextCreatures[winner] = self.mutate(self.creatures[gen][winner],(gen+1)*self.c_count+winner)
+            
+            # Winner reproduction with carrying capacity cap
+            force_wild_w = (species_offspring_count.get(w_species, 0) >= max_cap)
+            if force_wild_w:
+                nextCreatures[winner] = self.mutate(self.creatures[gen][winner], (gen+1)*self.c_count+winner, force_big_mutation=True)
+            elif random.uniform(0,1) < rank/self.c_count*2.0:
+                nextCreatures[winner] = self.mutate(self.creatures[gen][winner], (gen+1)*self.c_count+winner)
+                species_offspring_count[w_species] = species_offspring_count.get(w_species, 0) + 1
             else:
-                nextCreatures[winner] = self.clone(self.creatures[gen][winner],(gen+1)*self.c_count+winner)
-            nextCreatures[loser] = self.mutate(self.creatures[gen][winner],(gen+1)*self.c_count+loser)
-            self.creatures[gen][loser].living = False
+                nextCreatures[winner] = self.clone(self.creatures[gen][winner], (gen+1)*self.c_count+winner)
+                species_offspring_count[w_species] = species_offspring_count.get(w_species, 0) + 1
+            
+            # Loser reproduction: check innovation incubation protection
+            if loser in protected_creatures:
+                # Young species innovation protection: breed within its own lineage
+                l_creature = self.creatures[gen][loser]
+                nextCreatures[loser] = self.mutate(l_creature, (gen+1)*self.c_count+loser)
+                species_offspring_count[l_creature.species] = species_offspring_count.get(l_creature.species, 0) + 1
+                self.creatures[gen][loser].living = True
+            else:
+                # Standard loser replacement
+                force_wild_l = (species_offspring_count.get(w_species, 0) >= max_cap)
+                if force_wild_l:
+                    nextCreatures[loser] = self.mutate(self.creatures[gen][winner], (gen+1)*self.c_count+loser, force_big_mutation=True)
+                else:
+                    nextCreatures[loser] = self.mutate(self.creatures[gen][winner], (gen+1)*self.c_count+loser)
+                    species_offspring_count[w_species] = species_offspring_count.get(w_species, 0) + 1
+                self.creatures[gen][loser].living = False
         
         self.creatures.append(nextCreatures)
         self.rankings = np.append(self.rankings,currRankings.reshape((1,self.c_count)),axis=0)
@@ -243,8 +302,8 @@ class Sim:
     def clone(self, parent, newID):
         return Creature(parent.dna, newID, parent.species, self, self.ui)
         
-    def mutate(self, parent, newID):
-        newDNA, newSpecies, cwc = parent.getMutatedDNA(self)
+    def mutate(self, parent, newID, force_big_mutation=False):
+        newDNA, newSpecies, cwc = parent.getMutatedDNA(self, force_big_mutation=force_big_mutation)
         newCreature = Creature(newDNA, newID, newSpecies, self, self.ui)
         if newCreature.species != parent.species:
             self.species_info.append(SpeciesInfo(self,newCreature,parent))

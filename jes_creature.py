@@ -101,13 +101,13 @@ class Creature:
     def saveCalmState(self, arr):
         self.calmState = arr
         
-    def getMutatedDNA(self, sim):
+    def getMutatedDNA(self, sim, force_big_mutation=False):
         mutation = np.clip(np.random.normal(0.0, 1.0, self.dna.shape[0]),-99,99)
         result = self.dna + sim.mutation_rate*mutation
         newSpecies = self.species
         
         big_mut_loc = 0
-        if random.uniform(0,1) < self.sim.big_mutation_rate: # do a big mutation
+        if force_big_mutation or random.uniform(0,1) < self.sim.big_mutation_rate: # do a big mutation
             newSpecies = sim.species_count
             sim.species_count += 1
             cell_x = random.randint(0,self.sim.CW-1)

@@ -22,6 +22,31 @@ class SpeciesInfo:
         self.reps[1] = me.IDNumber
         self.coor = None
         
+        self.birth_gen = math.floor(me.IDNumber // self.sim.c_count)
+        self.best_fitness = -1e9
+        self.last_improvement_gen = self.birth_gen
+
+    def record_fitness(self, current_gen, fitness):
+        if fitness is not None and fitness > self.best_fitness:
+            self.best_fitness = fitness
+            self.last_improvement_gen = current_gen
+
+    def is_incubating(self, current_gen, leader_tenure=0):
+        if self.birth_gen == 0:
+            return False
+        age = current_gen - self.birth_gen
+        if age <= 0:
+            return True
+        # Base grace period scales with the tenure of the dominant species
+        base_grace = max(15, min(60, 15 + int(0.05 * leader_tenure)))
+        if age <= base_grace:
+            return True
+        # Progress-gated extension: if the species is actively improving, allow up to 100 gens
+        stagnation = current_gen - self.last_improvement_gen
+        if stagnation <= 10 and age <= 100:
+            return True
+        return False
+        
     def becomeProminent(self):  # if you are prominent, all your ancestors become prominent.
         self.prominent = True
         self.insertIntoProminentSpeciesList()
