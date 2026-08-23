@@ -154,6 +154,18 @@ def arrayIntMultiply(arr, factor):
         result[i] = int(arr[i]*factor)
     return result
 
+def flipDNA(dna, CW, CH, beats_per_cycle, traits_per_box):
+    """
+    Horizontally mirrors a creature's DNA matrix across its width dimension (CW).
+    Transforms a leftward sprinter into an identical rightward sprinter.
+    """
+    DNA_LEN = CH * CW * beats_per_cycle * traits_per_box
+    grid = dna[:DNA_LEN].reshape(CH, CW, beats_per_cycle, traits_per_box)
+    flipped_grid = np.flip(grid, axis=1) # flip horizontally along CW
+    new_dna = dna.copy()
+    new_dna[:DNA_LEN] = flipped_grid.flatten()
+    return new_dna
+
 def parse_population_size(raw_input, default=250):
     """
     Parses and autocorrects input population size to the nearest valid value.

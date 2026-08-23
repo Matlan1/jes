@@ -1,5 +1,5 @@
 import numpy as np
-from utils import getDistanceArray, applyMuscles, HAS_NUMBA, jit_simulateRun
+from utils import getDistanceArray, applyMuscles, HAS_NUMBA, jit_simulateRun, flipDNA
 from jes_creature import Creature
 from jes_species_info import SpeciesInfo
 from jes_dataviz import drawAllGraphs
@@ -194,8 +194,18 @@ class Sim:
         gen = len(self.creatures)-1
         creatureState = self.simulateImport(gen, 0, self.c_count, True)
         nodeCoor, muscles, _ = self.simulateRun(creatureState, self.trial_time, False)
-        finalScores = nodeCoor[:,:,:,0].mean(axis=(1, 2)) # find each creature's average X-coordinate
+        rawScores = nodeCoor[:,:,:,0].mean(axis=(1, 2)) # find each creature's average X-coordinate
+        finalScores = np.abs(rawScores) # Absolute speed / displacement
         
+        # DNA Mirroring: for any creature moving left, horizontally flip its DNA & calmState
+        # so that its revolutionary locomotion physics are rescued and propelled to the right
+        for c in range(self.c_count):
+            if rawScores[c] < 0:
+                self.creatures[gen][c].dna = flipDNA(self.creatures[gen][c].dna, self.CW, self.CH, self.beats_per_cycle, self.traits_per_box)
+                if self.creatures[gen][c].calmState is not None:
+                    self.creatures[gen][c].calmState[:, :, 0] = -np.flip(self.creatures[gen][c].calmState[:, :, 0], axis=1)
+                    self.creatures[gen][c].calmState[:, :, 1] = np.flip(self.creatures[gen][c].calmState[:, :, 1], axis=1)
+
         # Tallying up all the data
         currRankings = np.flip(np.argsort(finalScores),axis=0)
         newPercentiles = np.zeros((self.HUNDRED+1))
@@ -238,6 +248,7 @@ class Sim:
         # Option 2: Anti-monopoly carrying capacity cap (max 50% population per species)
         max_cap = max(2, int(self.c_count * self.max_species_fraction))
         species_offspring_count = {sp: 0 for sp in newSpeciesPops}
+        WILD_EXILE_PROB = 0.12 # Calibrated speciation rate: prevents TV static and keeps median climbing
 
         currCreatures = self.creatures[-1]
         nextCreatures = [None]*self.c_count
@@ -252,10 +263,13 @@ class Sim:
             w_species = self.creatures[gen][winner].species
             nextCreatures[winner] = None
             
-            # Winner reproduction with carrying capacity cap
-            force_wild_w = (species_offspring_count.get(w_species, 0) >= max_cap)
-            if force_wild_w:
-                nextCreatures[winner] = self.mutate(self.creatures[gen][winner], (gen+1)*self.c_count+winner, force_big_mutation=True)
+            # Winner reproduction with calibrated carrying capacity cap
+            over_cap_w = (species_offspring_count.get(w_species, 0) >= max_cap)
+            if over_cap_w:
+                if random.uniform(0, 1) < WILD_EXILE_PROB:
+                    nextCreatures[winner] = self.mutate(self.creatures[gen][winner], (gen+1)*self.c_count+winner, force_big_mutation=True)
+                else:
+                    nextCreatures[winner] = self.mutate(self.creatures[gen][winner], (gen+1)*self.c_count+winner)
             elif random.uniform(0,1) < rank/self.c_count*2.0:
                 nextCreatures[winner] = self.mutate(self.creatures[gen][winner], (gen+1)*self.c_count+winner)
                 species_offspring_count[w_species] = species_offspring_count.get(w_species, 0) + 1
@@ -272,9 +286,12 @@ class Sim:
                 self.creatures[gen][loser].living = True
             else:
                 # Standard loser replacement
-                force_wild_l = (species_offspring_count.get(w_species, 0) >= max_cap)
-                if force_wild_l:
-                    nextCreatures[loser] = self.mutate(self.creatures[gen][winner], (gen+1)*self.c_count+loser, force_big_mutation=True)
+                over_cap_l = (species_offspring_count.get(w_species, 0) >= max_cap)
+                if over_cap_l:
+                    if random.uniform(0, 1) < WILD_EXILE_PROB:
+                        nextCreatures[loser] = self.mutate(self.creatures[gen][winner], (gen+1)*self.c_count+loser, force_big_mutation=True)
+                    else:
+                        nextCreatures[loser] = self.mutate(self.creatures[gen][winner], (gen+1)*self.c_count+loser)
                 else:
                     nextCreatures[loser] = self.mutate(self.creatures[gen][winner], (gen+1)*self.c_count+loser)
                     species_offspring_count[w_species] = species_offspring_count.get(w_species, 0) + 1
