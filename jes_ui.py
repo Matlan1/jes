@@ -353,9 +353,11 @@ class UI:
 
     def detectEvents(self):
         for event in pygame.event.get():
-            if event.type == pygame.KEYDOWN:
+            if event.type == pygame.QUIT:
+                self.running = False
+            elif event.type == pygame.KEYDOWN:
                 new_gen = None
-                if event.key == pygame.K_c and (pygame.key.get_mods() & pygame.KMOD_CTRL): # pressing Ctrl+C                    
+                if event.key == pygame.K_ESCAPE or (event.key == pygame.K_c and (pygame.key.get_mods() & pygame.KMOD_CTRL)): # pressing ESC or Ctrl+C
                     self.running = False                    
                 if event.key == pygame.K_LEFT:
                     new_gen = max(0,self.genSlider.val-1)
