@@ -6,8 +6,10 @@ import math
 from jes_species_info import SpeciesInfo
 import random
 
+_dna_warning_issued = False
+
 class Creature:
-    __slots__ = ('dna', 'calmState', 'icons', 'iconCoor', 'IDNumber', 'fitness', 'rank', 'living', 'species', 'sim', 'ui', 'codonWithChange')
+    __slots__ = ('dna', 'calmState', 'icons', 'iconCoor', 'IDNumber', 'fitness', 'rank', 'living', 'species', 'sim', 'ui', 'codonWithChange', 'pinned')
 
     def __init__(self,d,pIDNumber,parent_species,_sim,_ui):
         self.dna = d.astype(np.float32) if isinstance(d, np.ndarray) and d.dtype != np.float32 else d
@@ -22,6 +24,16 @@ class Creature:
         self.sim = _sim
         self.ui = _ui
         self.codonWithChange = None
+        self.pinned = False
+
+    def ensure_dna(self):
+        """Lazily reload this creature's body data if it was archived to disk.
+        No-op for hot-window and pinned creatures (their dna is always resident)."""
+        if self.dna is None:
+            loader = getattr(self.sim, "loadCreatureDNA", None)
+            if loader is not None:
+                loader(self)
+        return self.dna
     
     def getSpecies(self, parent_species):
         if parent_species == -1:
@@ -59,6 +71,7 @@ class Creature:
         drawRect(surface,transform,[None,0,None,None],WHITE)
 
     def drawCreature(self, surface, nodeState, frame, transform, drawLabels, shouldDrawClock):
+        self.ensure_dna()
         if drawLabels:
             self.drawEnvironment(surface,nodeState,frame,transform)
             
@@ -86,6 +99,7 @@ class Creature:
 
         
     def drawIcon(self, ICON_DIM, BG_COLOR, BEAT_FADE_TIME):
+        self.ensure_dna()
         icon = pygame.Surface(ICON_DIM, pygame.SRCALPHA, 32)
         icon.fill(BG_COLOR)
         transform = [ICON_DIM[0]/2,ICON_DIM[0]/(self.sim.CW+2),ICON_DIM[0]/(self.sim.CH+2.85)]
@@ -142,6 +156,17 @@ class Creature:
         return result, newSpecies, big_mut_loc
         
     def traitsToColor(self, dna, x, y, frame):
+        if dna is None:
+            dna = self.ensure_dna()
+            if dna is None:
+                # Body data was dropped (old non-checkpoint generation) and cannot
+                # be reloaded - draw a neutral placeholder rather than crashing.
+                global _dna_warning_issued
+                if not _dna_warning_issued:
+                    print(f"[jes] Note: body data for creature #{self.IDNumber} is past "
+                          f"the last checkpoint; drawing placeholder icons for it.")
+                    _dna_warning_issued = True
+                return (90, 90, 90, 160)
         beat = self.sim.frameToBeat(frame)
         beat_prev = (beat+self.sim.beats_per_cycle-1)%self.sim.beats_per_cycle
         prog = self.sim.frameToBeatFade(frame)

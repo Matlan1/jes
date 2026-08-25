@@ -9,8 +9,9 @@ import ctypes
 from ctypes import wintypes
 
 def get_system_memory_info():
-    """Returns (process_ram_mb, process_peak_mb, total_ram_gb, avail_ram_gb, mem_load_pct) using Win32 API."""
-    rss_mb, peak_mb, total_gb, avail_gb, load_pct = -1.0, -1.0, -1.0, -1.0, -1
+    """Returns (process_ram_mb, process_peak_mb, total_ram_gb, avail_ram_gb, mem_load_pct,
+    process_commit_mb) using Win32 API."""
+    rss_mb, peak_mb, total_gb, avail_gb, load_pct, commit_mb = -1.0, -1.0, -1.0, -1.0, -1, -1.0
     
     # Process memory
     try:
@@ -37,6 +38,7 @@ def get_system_memory_info():
         if GetProcessMemoryInfo(handle, ctypes.byref(counters), counters.cb):
             rss_mb = counters.WorkingSetSize / (1024 * 1024)
             peak_mb = counters.PeakWorkingSetSize / (1024 * 1024)
+            commit_mb = counters.PagefileUsage / (1024 * 1024)
     except Exception:
         pass
 
@@ -63,7 +65,7 @@ def get_system_memory_info():
     except Exception:
         pass
 
-    return rss_mb, peak_mb, total_gb, avail_gb, load_pct
+    return rss_mb, peak_mb, total_gb, avail_gb, load_pct, commit_mb
 
 
 def log_crash(exc_type, exc_value, exc_tb, sim=None, ui=None):
@@ -76,7 +78,7 @@ def log_crash(exc_type, exc_value, exc_tb, sim=None, ui=None):
     report_filename = os.path.join(reports_dir, f"crash_report_gen_{current_gen}_{timestamp}.txt")
     emergency_dump_filename = os.path.join(reports_dir, f"emergency_save_gen_{current_gen}_{timestamp}.npz")
     
-    rss_mb, peak_mb, total_gb, avail_gb, load_pct = get_system_memory_info()
+    rss_mb, peak_mb, total_gb, avail_gb, load_pct, commit_mb = get_system_memory_info()
     formatted_tb = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
     
     lines = []
@@ -93,7 +95,7 @@ def log_crash(exc_type, exc_value, exc_tb, sim=None, ui=None):
     lines.append("-" * 80)
     lines.append(f"OS / Platform:   {platform.platform()} ({platform.machine()})")
     lines.append(f"Python Version:  {sys.version.split()[0]} ({platform.architecture()[0]})")
-    lines.append(f"Process RAM RSS: {rss_mb:.2f} MB (Peak: {peak_mb:.2f} MB)" if rss_mb >= 0 else "Process RAM RSS: N/A")
+    lines.append(f"Process RAM RSS: {rss_mb:.2f} MB (Peak: {peak_mb:.2f} MB, Commit: {commit_mb:.2f} MB)" if rss_mb >= 0 else "Process RAM RSS: N/A")
     lines.append(f"System RAM:      {total_gb:.2f} GB total, {avail_gb:.2f} GB free ({load_pct}% used)" if total_gb >= 0 else "System RAM: N/A")
     lines.append(f"NumPy Version:   {np.__version__}")
     
@@ -174,7 +176,7 @@ def log_crash(exc_type, exc_value, exc_tb, sim=None, ui=None):
             )
             saved_checkpoint = True
         except Exception as dump_err:
-            print(f"Failed to write emergency checkpoint: {dump_err}", file=sys.stderr)
+            print(f"Failed to write emergency checkpoint: {dump_err!r}", file=sys.stderr)
 
     # Prominent Console Output
     print("\n" + "!" * 80)

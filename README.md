@@ -23,6 +23,25 @@ Q: Open/close the creature mosaic (can also be done by clicking "Show creatures"
 
 LEFT/RIGHT: Scroll through forward/backward through the timeline (can also be done by scrolling the scroll bar)
 
+# Long-run memory & history (2026-08-25)
+
+The simulator keeps RAM flat no matter how many generations you run:
+
+- The last ~20 generations stay fully in memory (plus a rolling window of recent
+  chart statistics).
+- Every 100th generation ("checkpoint") is archived to disk under `history_archive/`
+  (~13 MB per checkpoint at pop 5000). Scrolling back to a checkpoint reloads it
+  automatically; the caption tells you when you're viewing one. Each run gets its
+  own fresh archive - an archive left over from an older run is discarded at launch.
+- Generations between checkpoints keep all charts, species stats, names, colors,
+  fitness and rank forever - but their individual bodies are only kept for
+  creatures that still matter (see next point).
+- Representatives of prominent species (and anything you highlight with S) are
+  pinned in memory so genealogy replays always work.
+
+Delete the `history_archive/` folder to reclaim disk. Tests: `python tests/test_history_primitives.py`
+and `python tests/test_memory_bounds.py`.
+
 # Updates (2025-01-11)
 
 -Mutation-finding-bug fixed (I think)

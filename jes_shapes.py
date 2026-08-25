@@ -121,11 +121,16 @@ def drawSpeciesCircle(screen, s, coor, R, sim, species_info, font, shouldDrawArr
     
     pygame.draw.circle(screen,color,coor,R)
     centerText(screen, name, cx, cy-22, (0,0,0), font)
-        
+
     creature = sim.getCreatureWithID(info.reps[2])
-    icon = creature.getIcon(0, ui.ICON_DIM[0], ui.MOSAIC_COLOR, sim.beat_fade_time)
-    tiny_icon = pygame.transform.scale(icon, (50,50))
-    screen.blit(tiny_icon,(cx-25,cy-11))
+    if creature is not None:
+        icon = creature.getIcon(0, ui.ICON_DIM[0], ui.MOSAIC_COLOR, sim.beat_fade_time)
+        tiny_icon = pygame.transform.scale(icon, (50,50))
+        screen.blit(tiny_icon,(cx-25,cy-11))
+    else:
+        # representative's body was retired past a checkpoint - show a placeholder tile
+        pygame.draw.rect(screen, (40,40,45), (cx-25,cy-11,50,50), border_radius=8)
+        centerText(screen, "past checkpoint", cx, cy+14, (115,115,125), font)
     
     if shouldDrawArrow:
         ancestorID = species_info[s].ancestorID

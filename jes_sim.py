@@ -3,6 +3,7 @@ from utils import getDistanceArray, applyMuscles, HAS_NUMBA, jit_simulateRun, fl
 from jes_creature import Creature
 from jes_species_info import SpeciesInfo
 from jes_dataviz import drawAllGraphs
+from jes_history import HistoryStore, PopArchiveList, TieredRankings, GenBodyCache
 import time
 import random
 
@@ -11,7 +12,9 @@ class Sim:
     _beat_fade_time, _c_dim, _beats_per_cycle, _node_coor_count,
     _y_clips, _ground_friction_coef, _gravity_acceleration_coef,
     _calming_friction_coef, _typical_friction_coef, _muscle_coef,
-    _traits_per_box, _traits_extra, _mutation_rate, _big_mutation_rate, _UNITS_PER_METER):
+    _traits_per_box, _traits_extra, _mutation_rate, _big_mutation_rate, _UNITS_PER_METER,
+    _ram_window_gens=20, _snapshot_every=100, _lru_capacity=6, _archive_dir="history_archive",
+    _pops_tail_gens=2048):
         self.c_count = _c_count #creature count
         self.species_count = _c_count #species count
         self.stabilization_time = _stabilization_time
@@ -55,14 +58,42 @@ class Sim:
         self.current_leader = None
         self.leader_tenure = 0
         self.min_incubation_survivors = 2 # Option 1: Minimum protected creatures for incubating young species
+
+        # Tiered history: keeps RAM flat on very long runs.
+        # Hot window (recent gens) fully resident; checkpoint generations spill their
+        # bodies (dna + calmState + rankings) to disk; other old generations keep only
+        # chart data (percentiles in RAM, species pops via a disk-backed list).
+        self.ram_window_gens = max(2, int(_ram_window_gens))
+        self.snapshot_every = max(1, int(_snapshot_every))
+        calm_len = (self.CH + 1) * (self.CW + 1) * self.node_coor_count
+        self.store = HistoryStore(_archive_dir, self.c_count, self.trait_count, calm_len, self.snapshot_every)
+        self.DISK_WARN_FREE_BYTES = 20 * (1024 ** 3)
+        self.DISK_MIN_FREE_BYTES = 5 * (1024 ** 3)
+        self._last_disk_warning_time = -1e9
+        self.archived_upto = 0          # generations [0, archived_upto) have been retired
+        self.pinned_creatures = {}      # IDNumber -> Creature whose body stays resident forever
+        self.temp_pins = set()          # Creatures protected only while highlighted/movies play
+        self._alive_last_gen = set()    # species present in the previous generation's census
+        self.body_cache = GenBodyCache(self.store, _lru_capacity,
+                                       on_evict=self._onBodyCacheEvict,
+                                       is_protected=self._isProtected)
+
         self.creatures = None
-        self.rankings = []
+        self.rankings = TieredRankings(self.store, self.ram_window_gens)
         self.percentiles = []
-        self.species_pops = []
+        self.species_pops = PopArchiveList(self.store, _pops_tail_gens)
         self.species_info = []
         self.prominent_species = []
         self.ui = None
         self.last_gen_run_time = -1
+
+    def _isProtected(self, c):
+        return c.pinned or c in self.temp_pins
+
+    def _onBodyCacheEvict(self, gen):
+        row = self.creatures[gen] if self.creatures is not None and gen < len(self.creatures) else None
+        if row is not None:
+            self.body_cache.strip_shells(row)
         
     def initializeUniverse(self):
         self.creatures = [[None]*self.c_count]
@@ -103,24 +134,30 @@ class Sim:
         return n
 
     def getMuscleArray(self, gen, startIndex, endIndex):
-        COUNT = endIndex-startIndex
+        return self.buildMuscleArray([self.creatures[gen][c].dna for c in range(startIndex, endIndex)])
+
+    def buildMuscleArray(self, dnas):
+        COUNT = len(dnas)
         m = np.empty((COUNT,self.CH,self.CW,self.beats_per_cycle,self.traits_per_box+1)) # add one trait for diagonal length.
         DNA_LEN = self.CH*self.CW*self.beats_per_cycle*self.traits_per_box
-        all_dna = np.array([self.creatures[gen][c].dna[:DNA_LEN] for c in range(startIndex, endIndex)]).reshape(COUNT, self.CH, self.CW, self.beats_per_cycle, self.traits_per_box)
+        all_dna = np.array([d[:DNA_LEN] for d in dnas]).reshape(COUNT, self.CH, self.CW, self.beats_per_cycle, self.traits_per_box)
         m[:,:,:,:,:self.traits_per_box] = 1.0 + all_dna / 3.0
         m[:,:,:,:,3] = np.hypot(m[:,:,:,:,0], m[:,:,:,:,1]) # Set diagonal tendons
         return m
 
     def getBrainArrays(self, gen, startIndex, endIndex):
-        COUNT = endIndex - startIndex
+        return self.buildBrainArrays([self.creatures[gen][c].dna for c in range(startIndex, endIndex)])
+
+    def buildBrainArrays(self, dnas):
+        COUNT = len(dnas)
         idx = self.DNA_MORPH_LEN
-        all_brains = np.array([self.creatures[gen][c].dna[idx:idx+self.BRAIN_LEN] for c in range(startIndex, endIndex)])
-        
+        all_brains = np.array([d[idx:idx+self.BRAIN_LEN] for d in dnas])
+
         w1_end = self.W1_LEN
         b1_end = w1_end + self.B1_LEN
         w2_end = b1_end + self.W2_LEN
         b2_end = w2_end + self.B2_LEN
-        
+
         W1 = all_brains[:, :w1_end].reshape(COUNT, self.N_IN, self.N_HID)
         b1 = all_brains[:, w1_end:b1_end].reshape(COUNT, self.N_HID)
         W2 = all_brains[:, b1_end:w2_end].reshape(COUNT, self.N_HID, self.N_OUT)
@@ -128,11 +165,124 @@ class Sim:
         return W1, b1, W2, b2
 
     def simulateImport(self, gen, startIndex, endIndex, fromCalmState):
+        self.ensureGenBodies(gen) # checkpoint generations must be whole-gen loaded before the calm-state check below
         nodeCoor = self.getStartingNodeCoor(gen,startIndex,endIndex,fromCalmState)
         muscles = self.getMuscleArray(gen,startIndex,endIndex)
         brains_W1, brains_b1, brains_W2, brains_b2 = self.getBrainArrays(gen,startIndex,endIndex)
         currentFrame = 0
         return nodeCoor, muscles, brains_W1, brains_b1, brains_W2, brains_b2, currentFrame
+
+    def simulateImportCreatures(self, creatures):
+        """Trial import built from Creature OBJECTS instead of a generation row -
+        works for pinned representatives whose generation row has been retired."""
+        COUNT = len(creatures)
+        nodeCoor = np.zeros((COUNT,self.CH+1,self.CW+1,self.node_coor_count))
+        use_calm = any(c.calmState is not None for c in creatures)
+        if not use_calm:
+            # create grid of nodes along perfect gridlines
+            coorGrid = np.mgrid[0:self.CW+1,0:self.CH+1]
+            coorGrid = np.swapaxes(np.swapaxes(coorGrid,0,1),1,2)
+            nodeCoor[:,:,:,0:2] = coorGrid
+        else:
+            for i,c in enumerate(creatures):
+                if c.calmState is not None:
+                    nodeCoor[i,:,:,:] = c.calmState
+            nodeCoor[:,:,:,1] -= self.CH  # lift the creature above ground level
+        muscles = self.buildMuscleArray([c.dna for c in creatures])
+        brains_W1, brains_b1, brains_W2, brains_b2 = self.buildBrainArrays([c.dna for c in creatures])
+        return nodeCoor, muscles, brains_W1, brains_b1, brains_W2, brains_b2, 0
+
+    def ensureGenBodies(self, gen):
+        """Loads a retired checkpoint generation's bodies back onto its shells.
+        Whole-gen only: getStartingNodeCoor inspects shells[0].calmState to pick
+        the starting pose for everyone."""
+        if gen >= self.archived_upto: # hot generation - bodies are resident
+            return
+        if not self.store.has_snapshot(gen):
+            return
+        row = self.creatures[gen]
+        if row is None:
+            return
+        if not self.body_cache.is_loaded(gen):
+            self.body_cache.load(gen, row)
+
+    def displayGenFor(self, gen):
+        """Which generation's creatures to show when the slider sits on `gen`.
+        Inside the hot window: itself. Older: the most recent checkpoint."""
+        if gen >= self.archived_upto:
+            return gen
+        snap = (gen // self.snapshot_every) * self.snapshot_every
+        return snap
+
+    def loadCreatureDNA(self, creature):
+        """Single-creature lazy reload used by rendering paths (icons/movies).
+        Restores both dna and calmState so icons render the real pose."""
+        gen = creature.IDNumber // self.c_count
+        if not self.store.has_snapshot(gen):
+            return # hot or dropped - nothing to load (dropped draws a placeholder)
+        idx = creature.IDNumber % self.c_count
+        entry = self.body_cache.peek(gen)
+        if entry is None:
+            row = self.creatures[gen]
+            if row is None:
+                return
+            entry = self.body_cache.load(gen, row) # wires every shell of the gen
+        if creature.dna is None:
+            creature.dna = entry[0][idx]
+        if creature.calmState is None and creature.dna is not None:
+            creature.calmState = entry[1][idx].reshape(self.CH + 1, self.CW + 1, self.node_coor_count)
+
+    def pinCreature(self, c):
+        if c is None:
+            return
+        c.pinned = True
+        self.pinned_creatures[c.IDNumber] = c
+
+    def pinSpeciesReps(self, info):
+        for ID in info.reps:
+            if ID:
+                self.pinCreature(self.getCreatureWithID(ID))
+
+    def tempPinCreature(self, c):
+        if c is not None:
+            self.temp_pins.add(c)
+
+    def clearTempPins(self):
+        self.temp_pins.clear()
+
+    def _checkArchiveDiskSpace(self):
+        free = self.store.disk_free_bytes()
+        if free < self.DISK_MIN_FREE_BYTES:
+            raise RuntimeError(
+                f"History archive drive nearly full ({free / 1024 ** 3:.1f} GB free). "
+                f"Stopping before the archive is corrupted - free up space or delete "
+                f"the '{self.store.dir}' folder to reclaim disk.")
+        now = time.time()
+        if free < self.DISK_WARN_FREE_BYTES and now - self._last_disk_warning_time > 3600:
+            self._last_disk_warning_time = now
+            print(f"[jes] WARNING: archive drive has {free / 1024 ** 3:.1f} GB free - "
+                  f"consider deleting old history archives.")
+
+    def _retireGeneration(self, g):
+        """Called once per generation as it ages out of the hot window.
+        Checkpoint generations spill their bodies to disk first; everything else
+        just drops them. Pinned creatures keep their bodies in RAM either way."""
+        row = self.creatures[g]
+        if row is None:
+            return
+        is_checkpoint = (g % self.snapshot_every == 0)
+        if is_checkpoint and not self.store.has_snapshot(g):
+            self._checkArchiveDiskSpace()
+            dna_block = np.stack([np.asarray(c.dna, dtype=np.float32) for c in row])
+            calm_block = np.stack([np.asarray(c.calmState, dtype=np.float64) for c in row])
+            self.store.write_snapshot(g, dna_block, calm_block)
+        for c in row:
+            if not self._isProtected(c):
+                c.dna = None
+                c.calmState = None
+                c.icons = [None, None] # regenerable from dna; keeps checkpoint shells small
+        if not is_checkpoint:
+            self.creatures[g] = None # shells die too; pinned ones survive via pinned_creatures
 
     def frameToBeat(self, f):
         return (f//self.beat_time)%self.beats_per_cycle
@@ -188,6 +338,7 @@ class Sim:
     def doSpeciesInfo(self,nsp,best_of_each_species,gen):
         nsp = dict(sorted(nsp.items()))
         running = 0
+        alive_now = set()
         if len(nsp) > 0:
             top_sp = max(nsp, key=lambda k: nsp[k][0])
             if top_sp == self.current_leader:
@@ -201,18 +352,31 @@ class Sim:
             nsp[sp][1] = running
             nsp[sp][2] = running+pop
             running += pop
-            
+            alive_now.add(sp)
+
             info = self.species_info[sp]
-            info.reps[3] = best_of_each_species[sp] # most-recent representative
+            info.last_seen_gen = gen
+            new_rep = best_of_each_species[sp]
+            info.reps[3] = new_rep # most-recent representative (hot window covers it while alive)
             if pop > info.apex_pop: # This species reached its highest population
                 info.apex_pop = pop
-                info.reps[2] = best_of_each_species[sp] # apex representative
+                info.reps[2] = new_rep # apex representative
+                if info.prominent:
+                    self.pinCreature(self.getCreatureWithID(new_rep))
             if pop >= self.c_count*self.S_NOTABLE and not info.prominent:  #prominent threshold
                 info.becomeProminent()
-            
+
             # Record fitness for adaptive incubation tracking
             best_creature = self.getCreatureWithID(best_of_each_species[sp])
             info.record_fitness(gen, best_creature.fitness)
+
+        # Species that just went extinct lose hot-window coverage: freeze the
+        # replayable lineage of any species a genealogy hover / S-store can reach.
+        for sp in self._alive_last_gen - alive_now:
+            info = self.species_info[sp]
+            if info.prominent or (self.ui is not None and sp == getattr(self.ui, "species_storage", None)):
+                self.pinSpeciesReps(info)
+        self._alive_last_gen = alive_now
                 
     def checkALAP(self):
         if self.ui.ALAPButton.setting == 1: # We're already ALAP-ing!
@@ -354,17 +518,21 @@ class Sim:
         self.ui.genSlider.val_max = gen+1
         self.ui.genSlider.manualUpdate(gen)
         self.last_gen_run_time = time.time()-generation_start_time
-        
-        # Periodic memory cleanup: release unneeded calmStates for old historical generations
-        if gen > 15:
-            prune_gen = gen - 15
-            for c in range(self.c_count):
-                self.creatures[prune_gen][c].calmState = None
-        
+
+        # Tiered history maintenance: as generations age out of the hot window,
+        # checkpoint gens spill their bodies to disk and everything else drops them.
+        target = (gen + 1) - self.ram_window_gens
+        while 0 <= self.archived_upto <= target:
+            self._retireGeneration(self.archived_upto)
+            self.archived_upto += 1
+
         self.ui.detectMouseMotion()
         
     def getCreatureWithID(self, ID):
-        return self.creatures[ID//self.c_count][ID%self.c_count]
+        row = self.creatures[ID // self.c_count]
+        if row is not None:
+            return row[ID % self.c_count]
+        return self.pinned_creatures.get(ID) # retired non-checkpoint gen: pinned reps only
         
     def clone(self, parent, newID):
         return Creature(parent.dna, newID, parent.species, self, self.ui)

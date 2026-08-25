@@ -1,3 +1,5 @@
 __pycache__/
 *.py[cod]
 *.class
+crash_reports/
+history_archive/

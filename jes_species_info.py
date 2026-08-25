@@ -1,8 +1,11 @@
-import numpy as np
 from hashlib import sha256
 import math
 
 class SpeciesInfo:
+    __slots__ = ('sim', 'speciesID', 'ancestorID', 'level', 'apex_pop', 'reps',
+                 'prominent', 'coor', 'birth_gen', 'best_fitness',
+                 'last_improvement_gen', 'last_seen_gen')
+
     def __init__(self, _sim, me, ancestor):
         self.sim = _sim
         self.speciesID = me.species
@@ -11,20 +14,20 @@ class SpeciesInfo:
         if ancestor is not None:
             self.ancestorID = ancestor.species
             self.level = self.sim.species_info[ancestor.species].level+1
-            
+
         self.apex_pop = 0
-        self.reign = []
-        self.reps = np.zeros((4), dtype=int) # Representative ancestor, first, apex, and last creatures of this species.
+        self.reps = [0, 0, 0, 0] # Representative ancestor, first, apex, and last creatures of this species.
         self.prominent = False
-        
+
         if ancestor is not None:
             self.reps[0] = ancestor.IDNumber
         self.reps[1] = me.IDNumber
         self.coor = None
-        
+
         self.birth_gen = math.floor(me.IDNumber // self.sim.c_count)
         self.best_fitness = -1e9
         self.last_improvement_gen = self.birth_gen
+        self.last_seen_gen = self.birth_gen
 
     def record_fitness(self, current_gen, fitness):
         if fitness is not None and fitness > self.best_fitness:
@@ -65,6 +68,7 @@ class SpeciesInfo:
         
     def becomeProminent(self):  # if you are prominent, all your ancestors become prominent.
         self.prominent = True
+        self.sim.pinSpeciesReps(self) # keep our representative creatures' bodies resident forever
         self.insertIntoProminentSpeciesList()
         if self.ancestorID is not None: # you have a parent
             ancestor = self.sim.species_info[self.ancestorID]
@@ -93,9 +97,9 @@ class SpeciesInfo:
         return math.floor(self.reps[index]//self.sim.c_count)
         
     def getPerformance(self, sim, index):
-        gen = math.floor(self.reps[index]//self.sim.c_count)
-        c = self.reps[index]%self.sim.c_count
-        creature = sim.creatures[gen][c]
+        creature = sim.getCreatureWithID(self.reps[index])
+        if creature is None:
+            return None # representative's generation was retired past a checkpoint
         return creature.fitness
         
         

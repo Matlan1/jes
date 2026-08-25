@@ -74,23 +74,28 @@ def drawLineGraph(data,graph,margins,u,font):
         tick += unit
         
     toShow = [0,1,2,3,4,5,6,7,8,9,10,20,30,40,50,60,70,80,90,91,92,93,94,95,96,97,98,99,100]
-    for g in range(LEN):
-        for p in toShow:
-            prevVal = 0.0 if g == 0 else float(data[g-1][p])
+    # Downsample old history the same way the SAC does; recent 25% stays full-res.
+    indices = get_plot_indices(LEN, W)
+    for p in toShow:
+        prev_x = None
+        prev_y = None
+        for g in indices:
             nextVal = float(data[g][p])
-            
-            x1 = float(LEFT+(g/LEN)*W)
+
             x2 = float(LEFT+((g+1)/LEN)*W)
-            y1 = float(BOTTOM-H*(prevVal-minVal)/denom)
             y2 = float(BOTTOM-H*(nextVal-minVal)/denom)
-            
-            IMPORTANT = (p%10 == 0)
-            thickness = 2 if IMPORTANT else 1
-            color = WHITE if IMPORTANT else GRAY50
-            if p == 50:
-                color = RED
-                thickness = 3
-            pygame.draw.line(graph, color, (x1, y1), (x2, y2), width=thickness)
+
+            if prev_x is not None:
+                IMPORTANT = (p%10 == 0)
+                thickness = 2 if IMPORTANT else 1
+                color = WHITE if IMPORTANT else GRAY50
+                if p == 50:
+                    color = RED
+                    thickness = 3
+                pygame.draw.line(graph, color, (prev_x, prev_y), (x2, y2), width=thickness)
+
+            prev_x = x2
+            prev_y = y2
             
 def getRangeEvenIfNone(dicty, sorted_keys, key):
     if key in dicty:
@@ -132,12 +137,6 @@ class IncrementalSACRenderer:
         """Fast full redraw: fill pixel columns directly via numpy array."""
         sac.fill((0,0,0))
 
-        # Ensure all species have colors
-        for g in range(LEN):
-            for sp in data[g]:
-                if sp not in self.color_map:
-                    self.color_map[sp] = speciesToColor(sp, ui)
-
         indices = get_plot_indices(LEN, W)
 
         # Get direct pixel access (H x W x 3 via surfarray is [x, y, channel])
@@ -171,6 +170,8 @@ class IncrementalSACRenderer:
                 y_bot = min(H, int(H - pop[1] / c_count * H))
                 if y_bot <= y_top:
                     continue
+                if sp not in self.color_map:
+                    self.color_map[sp] = speciesToColor(sp, ui)
                 color = self.color_map[sp]
                 pixels[x1:x2, y_top:y_bot] = (int(color[0]), int(color[1]), int(color[2]))
 
@@ -232,7 +233,15 @@ class IncrementalSACRenderer:
 
         x1 = LEFT + prev_w
         x2 = LEFT + W
+        if not sorted_keys[1]:
+            self.cached_surface = sac.copy()
+            self.cached_gen = LEN - 1
+            return
         c_count = data[g][sorted_keys[1][-1]][2]
+        if c_count == 0:
+            self.cached_surface = sac.copy()
+            self.cached_gen = LEN - 1
+            return
         FAC = H / c_count
         
         d_slice = [data[g-1], data[g]]

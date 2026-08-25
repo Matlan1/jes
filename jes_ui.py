@@ -97,10 +97,21 @@ class UI:
     def reverse(self, i):
         return self.sim.c_count-1-i
         
+    def currentDisplayGen(self):
+        """Which generation's creatures are actually shown for the slider position.
+        Inside the hot window that's the slider generation itself; older positions
+        snap back to the most recent checkpoint whose bodies were archived."""
+        return self.sim.displayGenFor(int(self.genSlider.val))
+
+    def refreshMosaic(self):
+        disp = self.currentDisplayGen()
+        self.sim.ensureGenBodies(disp)
+        self.drawCreatureMosaic(disp)
+
     def detectMouseMotion(self):
         if self.sampleButton.setting == 1:
             return
-        gen = self.genSlider.val
+        gen = self.currentDisplayGen()
         mouseX, mouseY = pygame.mouse.get_pos()
         newCLH = [None,None,None]
         if self.mosaicVisible:
@@ -120,7 +131,7 @@ class UI:
                         newCLH = [0,self.sim.rankings[gen][i],i]
                     elif sort == 2:
                         newCLH = [0,self.sim.rankings[gen][self.reverse(i)],i]
-                        
+
         elif gen >= 0 and gen < len(self.sim.rankings):
             # rolling mouse over the Best+Median+Worst previews
             for r in range(len(self.previewLocations)):
@@ -128,7 +139,7 @@ class UI:
                 if mouseX >= PL[0] and mouseX < PL[0]+PL[2] and mouseY >= PL[1] and mouseY < PL[1]+PL[3]:
                     index = self.sim.rankings[gen][self.r_to_rank(r)]
                     newCLH = [1,index,r]
-            
+
             # rolling mouse over species circles
             rX = mouseX-self.GENEALOGY_COOR[0]
             rY = mouseY-self.GENEALOGY_COOR[1]
@@ -136,11 +147,11 @@ class UI:
                 answer = self.getRollOver(rX,rY)
                 if answer is not None:
                     newCLH = [2, answer]
-                    
+
             # rolling over storage
             if self.species_storage is not None and getDist(mouseX,mouseY,self.storage_coor[0],self.storage_coor[1]) <= self.GENEALOGY_COOR[4]:
                 newCLH = [2, self.species_storage]
-        
+
         if newCLH[1] != self.CLH[1]:
             self.CLH = newCLH
             if self.CLH[1] is None:
@@ -153,19 +164,27 @@ class UI:
                 self.movieScreens = []
                 for i in range(L):
                     ID = info.reps[i]
-                    gen = ID//self.sim.c_count
-                    c = ID%self.sim.c_count
-                    self.creatureHighlight.append(self.sim.creatures[gen][c])
-                    self.visualSimMemory.append(self.sim.simulateImport(gen,c,c+1,True))
+                    creature = self.sim.getCreatureWithID(ID)
+                    self.creatureHighlight.append(creature)
+                    self.sim.tempPinCreature(creature) # keep bodies resident while the movie plays
+                    if creature is not None and creature.ensure_dna() is not None:
+                        # object-based import: replays work even when the rep's
+                        # generation row was retired (pinned bodies stay resident)
+                        self.visualSimMemory.append(self.sim.simulateImportCreatures([creature]))
+                    else:
+                        self.visualSimMemory.append(None) # body was retired past a checkpoint - no replay
                     self.movieScreens.append(None)
                 self.drawInfoBarSpecies(self.CLH[1])
             else: # a creature was highlighted!
-                self.creatureHighlight = [self.sim.creatures[gen][self.CLH[1]]]
+                creature = self.sim.creatures[gen][self.CLH[1]]
+                self.creatureHighlight = [creature]
+                self.sim.tempPinCreature(creature)
                 self.visualSimMemory = [self.sim.simulateImport(gen, self.CLH[1], self.CLH[1]+1,True)]
                 self.movieScreens = [None]*1
-                self.drawInfoBarCreature(self.sim.creatures[gen][self.CLH[1]])
+                self.drawInfoBarCreature(creature)
         
     def clearMovies(self):
+        self.sim.clearTempPins() # highlighted bodies no longer need protection
         self.visualSimMemory = []
         self.creatureHighlight = []
         self.movieScreens = []
@@ -251,7 +270,8 @@ class UI:
                 continue
             stri = a_name if i == 0 else s_name
             performance = info.getPerformance(self.sim, i)
-            titles[i] = f"G{info.getWhen(i)}: {titles[i]} {stri} ({dist_to_text(performance, True, self.sim.UNITS_PER_METER)})"
+            perf_stri = "" if performance is None else f" ({dist_to_text(performance, True, self.sim.UNITS_PER_METER)})"
+            titles[i] = f"G{info.getWhen(i)}: {titles[i]} {stri}{perf_stri}"
         coor = (self.CM_MARGIN1+self.MS_WC,0)
         self.drawMovieGrid(self.screen, coor, mask, titles, [self.GRAYISH]*L, self.tinyFont)
         
@@ -278,7 +298,8 @@ class UI:
             X_center = int(self.INFO_W*(0.5 if i == 3 else 0.3))
             centerText(self.infoBarScreen, strings[i], X_center, self.MOVIE_SINGLE_DIM[1]+40+42*i, colors[i], self.smallFont)
         
-        self.drawLightboard(self.infoBarScreen,species,now,(self.INFO_W*0.6,self.MOVIE_SINGLE_DIM[1]+10,self.INFO_W*0.37, self.MS_H-self.MOVIE_SINGLE_DIM[1]-20))
+        lightboard_gen = min(self.currentDisplayGen(), len(self.sim.rankings)-1) # RIGHT-arrow allows val == val_max
+        self.drawLightboard(self.infoBarScreen,species,lightboard_gen,(self.INFO_W*0.6,self.MOVIE_SINGLE_DIM[1]+10,self.INFO_W*0.37, self.MS_H-self.MOVIE_SINGLE_DIM[1]-20))
         
     def drawLightboard(self, screen, species, gen, coor):
         DIM = max(1, self.MOSAIC_DIM[-1])
@@ -302,6 +323,10 @@ class UI:
         b = str(int(self.genSlider.val_max))
         genSurface = self.bigFont.render("Generation "+a+" / "+b, False, (255,255,255))
         self.screen.blit(genSurface,(40,y))
+        disp = self.currentDisplayGen()
+        if self.sim.creatures is not None and disp != int(self.genSlider.val):
+            capSurface = self.smallFont.render(f"(viewing checkpoint generation {disp} - bodies between checkpoints are only kept at checkpoints)", False, self.GRAYISH)
+            self.screen.blit(capSurface,(40,y+66))
         if self.species_storage is not None:
             s = self.species_storage
             R = self.GENEALOGY_COOR[4]
@@ -311,8 +336,8 @@ class UI:
         return 0 if r == 0 else (self.sim.c_count-1 if r == 2 else self.sim.c_count//2)
         
     def drawPreviews(self):
-        gen = self.genSlider.val
-        if gen >= 0 and gen < len(self.sim.rankings):
+        gen = self.currentDisplayGen()
+        if 0 <= gen < len(self.sim.rankings) and self.sim.creatures[gen] is not None:
             names = ["Best","Median","Worst"]
             for r in range(3):
                 r_i = self.r_to_rank(r)
@@ -334,9 +359,16 @@ class UI:
             if self.sample_frames >= self.sim.trial_time+self.SAMPLE_FREEZE_TIME:
                 self.startSampleHelper()
         for i in range(L):
+            DIM = arrayIntMultiply(self.MOVIE_SINGLE_DIM, MSCALE[self.CLH[0]])
+            if self.visualSimMemory[i] is None:
+                ms = pygame.Surface(DIM, pygame.SRCALPHA, 32)
+                ms.fill((25,25,30))
+                centerText(ms, "body data is past the last checkpoint", DIM[0]/2, DIM[1]/2, (130,130,140), self.tinyFont)
+                centerText(ms, "(stats and lineage are still exact)", DIM[0]/2, DIM[1]/2+34, (100,100,110), self.tinyFont)
+                self.movieScreens[i] = ms
+                continue
             if self.visualSimMemory[i][-1] < self.sim.trial_time:
                 self.visualSimMemory[i] = self.sim.simulateRun(self.visualSimMemory[i], 1, False)
-            DIM = arrayIntMultiply(self.MOVIE_SINGLE_DIM, MSCALE[self.CLH[0]])
             self.movieScreens[i] = pygame.Surface(DIM, pygame.SRCALPHA, 32)
         
             nodeArr = self.visualSimMemory[i][0]
@@ -348,10 +380,10 @@ class UI:
             self.creatureHighlight[i].drawCreature(self.movieScreens[i],nodeArr[0],currentFrame,transform,True,(i == 0))
                 
     def getHighlightedSpecies(self):
-        gen = self.genSlider.val
+        gen = self.currentDisplayGen()
         if self.CLH[0] == 2:
             return self.CLH[1]
-        elif self.CLH[0] == 0 or self.CLH[0] == 1:
+        elif (self.CLH[0] == 0 or self.CLH[0] == 1) and gen < len(self.sim.creatures) and self.sim.creatures[gen] is not None:
             return self.sim.creatures[gen][self.CLH[1]].species
         return None
 
@@ -373,9 +405,11 @@ class UI:
                     self.detectMouseMotion()
                 if event.key == 120: # pressing X will hide the Xs showing killed creatures
                     self.showXs = (not self.showXs)
-                    self.drawCreatureMosaic(self.genSlider.val)
+                    self.refreshMosaic()
                 elif event.key == 115: # pressing S will store the species of the creature you're rolling over into "storage".
                     self.species_storage = self.getHighlightedSpecies()
+                    if self.species_storage is not None: # keep the stored species' representatives replayable
+                        self.sim.pinSpeciesReps(self.sim.species_info[self.species_storage])
                 elif event.key == 99: # pressing C will change the highlighted species's color.
                     c = self.getHighlightedSpecies()
                     if c is not None:
@@ -440,7 +474,6 @@ class UI:
                 species_colors[i] = speciesToColor(sp, self)
             self.drawMovieGrid(screen, (0,0), [True]*LMS, species_names, species_colors, self.smallFont)
             return
-        gen = self.genSlider.val
         coor = (self.CM_MARGIN1+self.MS_WC,0)
         self.screen.blit(self.infoBarScreen,coor)
         if self.CLH[0] == 2:
@@ -451,10 +484,11 @@ class UI:
             DIM = self.previewLocations[self.CLH[2]]
             self.screen.blit(drawRingLight(DIM[2],DIM[3],6),(DIM[0],DIM[1]))
         else:
-            coor = self.sim.creatures[gen][self.CLH[1]].iconCoor
-            x = coor[0]+self.CM_MARGIN1
-            y = coor[1]+self.CM_MARGIN1
-            self.screen.blit(drawRingLight(coor[2],coor[3],6),(x,y))
+            icon_coor = self.creatureHighlight[0].iconCoor
+            if icon_coor is not None:
+                x = icon_coor[0]+self.CM_MARGIN1
+                y = icon_coor[1]+self.CM_MARGIN1
+                self.screen.blit(drawRingLight(icon_coor[2],icon_coor[3],6),(x,y))
             
                     
         
@@ -480,16 +514,16 @@ class UI:
        
     # Button and slider functions
     def updateGenSlider(self, gen):
-        self.drawCreatureMosaic(gen)
+        self.refreshMosaic()
         
     def toggleCreatures(self, button):
         self.mosaicVisible = (button.setting == 1)
         
     def toggleSort(self, button):
-        self.drawCreatureMosaic(self.genSlider.val)
-        
+        self.refreshMosaic()
+
     def toggleStyle(self, button):
-        self.drawCreatureMosaic(self.genSlider.val)
+        self.refreshMosaic()
     
     def doNothing(self, button):
         a = 5
@@ -501,15 +535,16 @@ class UI:
         
     def startSampleHelper(self):
         L = min(8, self.sim.c_count)
-        self.creatureHighlight = []
-        self.visualSimMemory = []
-        self.movieScreens = []
+        self.clearMovies()
+        gen = self.currentDisplayGen()
+        self.sim.ensureGenBodies(gen)
         self.CLH = [3,0]
         self.sample_frames = 0
         for i in range(L):
-            gen = self.genSlider.val
             c = (self.sample_i+i)%self.sim.c_count
-            self.creatureHighlight.append(self.sim.creatures[gen][c])
+            creature = self.sim.creatures[gen][c]
+            self.creatureHighlight.append(creature)
+            self.sim.tempPinCreature(creature)
             self.visualSimMemory.append(self.sim.simulateImport(gen,c,c+1,True))
             self.movieScreens.append(None)
         self.sample_i += L
